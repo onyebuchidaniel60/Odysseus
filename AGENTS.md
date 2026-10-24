@@ -49,3 +49,15 @@ Small, conventional commits per phase. Never force-push. Never commit secrets.
 ## Current phase
 
 See `AI_HANDOFF.md`.
+
+## Git push — hard rule
+
+After every phase commit, run `git push origin HEAD`.
+
+Authentication is configured globally via `git config --global credential.helper store`
+and `~/.git-credentials`. If push fails with "could not read Username" or
+"Authentication failed", the environment has lost its credential. Report the exact
+error, record the last commit hash in AI_HANDOFF.md, and stop. Do not attempt to
+create a token, modify git config, or work around the failure.
+
+A phase is not complete until push succeeds.
