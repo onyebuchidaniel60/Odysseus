@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ZodError, z } from "zod";
 
 import { envSchema, parseEnv } from "@/lib/env";
 
@@ -25,6 +26,27 @@ describe("environment schema", () => {
     expect(env.MOCK_SODEX).toBe(false);
     expect(env.NEXT_PUBLIC_APP_URL).toBe("http://localhost:3000");
     expect(env.ODYSSEUS_INDEX_TICKER).toBe("ssimag7");
+  });
+
+  it("defaults NODE_ENV to development when unset", () => {
+    const env = parseEnv(requiredEnv);
+
+    expect(env.NODE_ENV).toBe("development");
+  });
+
+  it("parses NODE_ENV production", () => {
+    const env = parseEnv({ ...requiredEnv, NODE_ENV: "production" });
+
+    expect(env.NODE_ENV).toBe("production");
+  });
+
+  it("throws a Zod error for an invalid NODE_ENV", () => {
+    const invalidEnv = {
+      ...requiredEnv,
+      NODE_ENV: "invalid",
+    } as unknown as z.input<typeof envSchema>;
+
+    expect(() => envSchema.parse(invalidEnv)).toThrow(ZodError);
   });
 
   it("coerces optional overrides from strings", () => {
