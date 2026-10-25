@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current phase: **Phase 5 — Risk engine + SoDEX client (complete)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client
-- Blocked by: none for Phase 6. Live SoDEX execution has known config/data TODOs for Phase 9.
-- Next task: Phase 6 — Orchestrator + API routes (see `IMPLEMENTATION_PLAN.md`)
+- Current phase: **Phase 6 — Orchestrator + API routes (complete)**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs
+- Blocked by: none for Phase 7. Live SoDEX execution has known config/data TODOs for Phase 9.
+- Next task: Phase 7 — Dashboard (see `IMPLEMENTATION_PLAN.md`)
 
 ## Project context
 
@@ -273,6 +273,120 @@ Response:
   run live SHORT orders until resolved.
 - No live SoDEX call was made in Phase 5. Real-path tests use mocked `fetch`.
 
+## Phase 6 findings — orchestrator + API routes
+
+### Files
+
+- `lib/pipeline/orchestrator.ts` — end-to-end pipeline and persistence store.
+- `app/api/run/route.ts` — operator-authenticated pipeline trigger.
+- `app/api/runs/route.ts` — last 20 runs.
+- `app/api/runs/[id]/route.ts` — full run detail.
+- `tests/unit/orchestrator.test.ts` — 7 tests with mocked externals and an
+  in-memory store.
+
+### Orchestrator behavior
+
+`runPipeline(options)` returns
+`{ success, runId?, decision: "SHORT" | "NO_TRADE", reason?, error? }`.
+`NO_TRADE` returns `success: true`. Unexpected failures and execution failures
+return `success: false` with `error`.
+
+Flow:
+
+1. `listIndices()` confirms `ssimag7` is available.
+2. `getConstituents("ssimag7")` fetches the seven constituents.
+3. `getCurrencyKlines()` fetches all constituent series plus the MAG7.ssi token
+   series (`1871600836616355842`).
+4. `synthesizeIndexKlines()` builds the index series.
+5. Insert `index_snapshot` with `validation_status: "pending"` and run time as
+   `observed_at`.
+6. Run `validateData()`; update the snapshot to `passed`/`failed`.
+7. On pass, run `computeDeviations()` and persist all seven signals.
+8. Top signal by absolute z-score is used. `|z| < 2.0` →
+   `below_z_score_threshold`; `direction === "lagging"` →
+   `lagging_constituent`.
+9. Run Bull, Bear, then Chief sequentially. Persist the decision row.
+10. Chief `NO_TRADE` → `chief_no_trade`.
+11. Run `evaluateRisk()`; persist `risk_check`. Rejection updates the decision
+    row to `NO_TRADE` with the first failed check reason.
+12. Approved trade places `SHORT` constituent perp + `LONG` `ssimag7` spot.
+13. Persist `execution` with merged leg data (symbol, side, size, order ID,
+    status). Execution failure updates the decision to `NO_TRADE` and returns
+    `success: false`.
+
+Audit events include `SNAPSHOT_CREATED`, `VALIDATION_PASSED`/`VALIDATION_FAILED`,
+`DEVIATION_COMPUTED`, `NO_TRADE`, `AI_DECISION`, `RISK_APPROVED`/`RISK_REJECTED`,
+`ORDER_PLACED`/`EXECUTION_FAILED`, `RUN_COMPLETED`, and `PIPELINE_FAILED`.
+
+### Risk context defaults
+
+No live portfolio, order-book spread, depth, or confidence source exists yet.
+Phase 6 therefore uses explicit demo inputs unless the caller overrides them:
+
+- `portfolioBalanceUsd: 100_000`
+- `spreadPct: 0.001`
+- `depthUsd: 200_000`
+- `dataConfidence: 0.9`
+
+`runPipeline` accepts optional `riskContext` for tests/future wiring. Phase 9
+must replace these with real account/order-book values before live execution.
+Do not treat the demo values as production risk data.
+
+### Persistence and run lock
+
+- `DrizzlePipelineStore` wraps `getDb()` and persists each stage.
+- Numeric columns are written as strings because Drizzle maps `numeric` to
+  `string`.
+- `index_snapshot.validation_status` is `NOT NULL`, so the row is inserted as
+  `"pending"` and updated after validation.
+- The unique index `idx_run_per_day` on
+  `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` enforces one run per UTC
+  day. A PostgreSQL `23505` is converted to `RunAlreadyExistsError` with the
+  existing `runId` when available; `POST /api/run` maps it to `409`.
+- Tests inject an in-memory `PipelineStore`; no database is required.
+
+### API contracts
+
+`POST /api/run`
+
+- Requires `x-operator-key` equal to `OPERATOR_SECRET`; otherwise `401`.
+- Calls `runPipeline({ mockSodex: process.env.MOCK_SODEX === "true" })`.
+- Returns the `PipelineResult` with `200` when `success` is true, `500` when the
+  pipeline failed, and `409` with `{ error, runId? }` for a daily-run conflict.
+
+`GET /api/runs`
+
+- Returns `{ runs: [...] }`, newest first, limited to 20.
+- Each run includes camelCase fields `id`, `observedAt`, `indexTicker`,
+  `validationStatus`, and `finalDecision`.
+
+`GET /api/runs/[id]`
+
+- Invalid UUID → `400`; missing run → `404`.
+- Returns:
+  `{ snapshot, signals, decision, riskCheck, execution, auditLog }`.
+- Signals are ordered by absolute z-score descending; audit entries are ordered
+  oldest first. Nullable stages are returned as `null`.
+
+### Tests
+
+`tests/unit/orchestrator.test.ts` covers:
+
+1. Happy path persists snapshot, seven signals, decision, risk check, execution,
+   and audit events.
+2. Captured fixtures run end-to-end and persist a `NO_TRADE` decision row
+   (`below_z_score_threshold`).
+3. Validation failure returns a successful `NO_TRADE` with no signals/risk/exec.
+4. Chief `NO_TRADE` short-circuits before risk.
+5. PostgreSQL `23505` becomes `RunAlreadyExistsError`.
+6. Risk rejection updates the decision and skips execution.
+7. Execution failure returns `success: false` and records the failed order.
+
+The generated test data uses flat constituent history with one BTC shock,
+producing a top overextended z-score of ~5.57 and zero tracking error. The
+fixture-based test uses the captured 90-bar series. All external calls are
+mocked; no network or database access occurs.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -322,8 +436,11 @@ the 0.5% tolerance.
 
 - **Phase 4 complete:** agents call OpenRouter at
   `https://openrouter.ai/api/v1` with model `openai/gpt-4o-mini`.
-- **Phase 5 complete:** risk engine and SoDEX mock/signed client are implemented;
-  `npm test` has 50 passing tests. No live SoDEX call was made.
+- **Phase 5 complete:** risk engine and SoDEX mock/signed client are implemented.
+  No live SoDEX call was made.
+- **Phase 6 complete:** orchestrator and run APIs are implemented; `npm test`
+  has 57 passing tests. The default risk context uses demo values until live
+  account/order-book data is wired in Phase 9.
 - **Phase 9 live verification:** confirm which MAG7 constituents have SoDEX
   perps. BTC/ETH/SOL confirmed; BNB/XRP/DOGE/HYPE open. If a constituent lacks a
   perp, the pipeline returns `NO_TRADE — no perp market`.
@@ -332,11 +449,14 @@ the 0.5% tolerance.
   SELL needs `quantity`, not `funds`. See the Phase 5 live-mode TODOs above.
 - **Phase 3 complete:** `R_index` is computed from `synthesizeIndexKlines`, not
   from `/indices/ssimag7/klines`.
-- **Phase 6:** the unique index on
-  `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` will cause the second
-  insert of the same day to fail with PostgreSQL error `23505`. The Phase 6
-  orchestrator must catch `23505` and return the existing run / `409` instead of
-  crashing.
+- **Phase 6 run lock:** the unique index on
+  `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` is handled as
+  `RunAlreadyExistsError` / HTTP `409`. A run that fails after the snapshot
+  insert still occupies that UTC day; retries must wait until the next day.
+- **Phase 7:** consume the API contracts documented above. `GET /api/runs`
+  returns `{ runs }`; `GET /api/runs/[id]` returns
+  `{ snapshot, signals, decision, riskCheck, execution, auditLog }`. Keep the
+  `NO_TRADE` outcome visually distinct (amber, not red).
 - SoSoValue constituents endpoint returns no timestamp; weight freshness is
   assumed.
 - No historical weight series — backtests would use current weights (mitigated
@@ -380,19 +500,18 @@ npm run db:migrate
 - `NO_TRADE` as a terminal success state
 - Deterministic vs LLM split
 - Database schema columns
+- Phase 6 API response shapes (`{ runs }` and the run-detail object)
 - Execution venue (testnet only in MVP)
 
 ## Next task
 
-Implement **Phase 6 — Orchestrator + API routes** from `IMPLEMENTATION_PLAN.md`.
+Implement **Phase 7 — Dashboard** from `IMPLEMENTATION_PLAN.md`.
 
-Phase 6 should wire the existing stages in order: data → validation → deviation →
-Bull/Bear/Chief → risk → execution, persisting each stage. Use
-`evaluateRisk` from `lib/pipeline/risk.ts` and `placeOrders(legs, mock)` from
-`lib/sodex/client.ts`. Pass the env `MOCK_SODEX` flag explicitly to
-`placeOrders`. Do not change the Phase 5 risk thresholds or signing logic.
+Phase 7 should replace the placeholder `app/page.tsx` with the single-screen
+pipeline view: deviation table, agent debate, decision card, risk checklist,
+execution status, and audit timeline. Add the run detail page and loading,
+empty, and error states. `NO_TRADE` must use an amber badge, not red.
 
-Phase 6 must catch PostgreSQL error `23505` from the unique index on
-`(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` and return the existing
-run / `409` instead of crashing. Do not proceed to Phase 7 until Phase 6 is
-verified and committed.
+Consume the Phase 6 API contracts exactly as documented above. Do not change the
+orchestrator, risk thresholds, SoDEX signing logic, or API response shapes
+without asking. Do not start Phase 8 automatically.
