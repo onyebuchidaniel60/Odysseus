@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current phase: **Phase 3 — Validation gate + deviation engine (complete)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine
+- Current phase: **Phase 4 — LLM agents (complete)**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter
 - Blocked by: none
-- Next task: Phase 4 — LLM agents (see `IMPLEMENTATION_PLAN.md`)
+- Next task: Phase 5 — Risk engine + SoDEX client (see `IMPLEMENTATION_PLAN.md`)
 
 ## Project context
 
@@ -106,6 +106,47 @@ reference and re-synthesizes the index from the aligned window. Tracking error i
   timestamp present in the synthetic index or has fewer than two complete
   klines. The validation gate is expected to run first.
 
+## Phase 4 findings — LLM agents (OpenRouter)
+
+### Files
+
+- `lib/pipeline/agents.ts` — Bull, Bear, and Chief agents with Zod schemas.
+- `tests/unit/agents.test.ts` — 8 tests; the OpenAI SDK is mocked, no network calls.
+
+### OpenRouter configuration
+
+- SDK: official `openai` package (`openai@7.43.0`), used as the OpenRouter client.
+- `baseURL`: `https://openrouter.ai/api/v1`
+- Model ID: `openai/gpt-4o-mini`
+- `temperature`: `0.2`
+- `response_format`: `{ type: "json_object" }`
+- `max_tokens`: `1000` (matches `ARCHITECTURE.md` §OpenAI)
+- Request timeout: `30_000` ms
+- API key: `process.env.OPENROUTER_API_KEY` (present in `.env.local`). Phase 1's
+  `lib/env.ts` still requires `OPENAI_API_KEY`; it is unchanged and unused by the
+  agents.
+
+The client is created lazily on the first agent call. If `OPENROUTER_API_KEY`
+is missing, the SDK throws, the wrapper catches it, and the safe fallback is
+returned.
+
+### Reliability behavior
+
+- Each agent validates the response against a Zod schema.
+- Any failure (network, timeout, rate limit, empty response, invalid JSON, or
+  schema mismatch) is logged with `console.warn` and retried once.
+- After the second failure:
+  - Bull → empty argument, `confidence: 0`, direction
+    `SHORT_CONSTITUENT_LONG_INDEX`.
+  - Bear → `recommended: "NO_TRADE"`, `confidence: 0`.
+  - Chief → `decision: "NO_TRADE"`, `confidence: 0`, thesis
+    `"AI failure fallback"`.
+- The Chief schema accepts a string decision so hallucinations can be detected.
+  `LONG` (and any other non-`SHORT`/`NO_TRADE` value) is overridden to
+  `NO_TRADE`; `LONG` appends `System override: LONG not permitted` to
+  `invalidators`.
+- Logs never include API keys or full prompts.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -143,8 +184,8 @@ the 0.5% tolerance.
 - Weights have no API timestamp — client stamps `observed_at`
 - Direction constraint: lagging constituents → `NO_TRADE` (spot is cash-only,
   cannot short the index)
-- LLM (`gpt-4o-mini`) only produces thesis + constrained enum;
-  validation/deviation/risk are deterministic
+- LLM (`openai/gpt-4o-mini` via OpenRouter) only produces thesis + constrained
+  enum; validation/deviation/risk are deterministic
 - `NO_TRADE` is a terminal success state
 - Index klines are synthesized from constituent klines because the raw endpoint
   is empty on this API key
@@ -153,6 +194,8 @@ the 0.5% tolerance.
 
 ## Known issues / open items
 
+- **Phase 4 complete:** agents call OpenRouter at
+  `https://openrouter.ai/api/v1` with model `openai/gpt-4o-mini`.
 - **Phase 5 verification needed:** confirm which MAG7 constituents have SoDEX
   perps. BTC/ETH/SOL confirmed; BNB/XRP/DOGE/HYPE open. If a constituent lacks a
   perp, the pipeline returns `NO_TRADE — no perp market`.
@@ -172,7 +215,10 @@ the 0.5% tolerance.
 
 - See `ARCHITECTURE.md` §Stack and `PROJECT_SPEC.md` §Security.
 - Env vars required: `DATABASE_URL`, `SOSO_API_KEY`, `SODEX_PRIVATE_KEY`,
-  `SODEX_API_KEY_NAME`, `SODEX_ACCOUNT_ID`, `OPENAI_API_KEY`, `OPERATOR_SECRET`.
+  `SODEX_API_KEY_NAME`, `SODEX_ACCOUNT_ID`, `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`, `OPERATOR_SECRET`.
+- `OPENROUTER_API_KEY` is used by the Phase 4 agents. `OPENAI_API_KEY` is still
+  required by the Phase 1 env schema but is not used by the agents.
 - Optional: `Z_SCORE_THRESHOLD` (default 2.0), `TRACKING_ERROR_TOLERANCE`
   (default 0.02), `MAX_POSITION_PCT` (default 0.10), `MOCK_SODEX` (default
   false).
@@ -190,7 +236,7 @@ npm run db:migrate
 
 ## Do NOT change without asking
 
-- Tech stack (Next.js, Drizzle, Postgres, OpenAI `gpt-4o-mini`, viem)
+- Tech stack (Next.js, Drizzle, Postgres, OpenRouter `openai/gpt-4o-mini`, viem)
 - Pipeline stage order
 - Direction constraint
 - `NO_TRADE` as a terminal success state
@@ -200,13 +246,11 @@ npm run db:migrate
 
 ## Next task
 
-Implement **Phase 4 — LLM agents** from `IMPLEMENTATION_PLAN.md`.
+Implement **Phase 5 — Risk engine + SoDEX client** from `IMPLEMENTATION_PLAN.md`.
 
-The Bull/Bear/Chief agents will receive the `DeviationSignal[]` array returned by
-`computeDeviations`. It is already sorted descending by `|zScore|`, so
-`signals[0]` is the top candidate. Phase 4 must pass that top signal correctly,
-apply the `|z| >= 2.0` threshold before invoking the agents, and return
-`NO_TRADE` when the top candidate is lagging. Keep the deterministic gate and
-deviation stages unchanged.
-
-Do not proceed to Phase 5 until Phase 4 is verified and committed.
+The Risk Engine will consume the `ChiefOutput` produced by
+`runChiefAgent`. It must check `decision === "SHORT"` before proceeding; any
+other value is `NO_TRADE`. The risk checks themselves remain deterministic and
+must not be delegated to the LLM. Phase 5 also adds the SoDEX client and the
+`MOCK_SODEX=true` simulated-fill path. Do not proceed to Phase 6 until Phase 5 is
+verified and committed.
