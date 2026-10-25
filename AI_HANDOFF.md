@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current phase: **Phase 4 — LLM agents (complete)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter
-- Blocked by: none
-- Next task: Phase 5 — Risk engine + SoDEX client (see `IMPLEMENTATION_PLAN.md`)
+- Current phase: **Phase 5 — Risk engine + SoDEX client (complete)**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client
+- Blocked by: none for Phase 6. Live SoDEX execution has known config/data TODOs for Phase 9.
+- Next task: Phase 6 — Orchestrator + API routes (see `IMPLEMENTATION_PLAN.md`)
 
 ## Project context
 
@@ -147,6 +147,132 @@ returned.
   `invalidators`.
 - Logs never include API keys or full prompts.
 
+## Phase 5 findings — risk engine + SoDEX client
+
+### Files
+
+- `lib/pipeline/risk.ts` — deterministic risk engine.
+- `lib/sodex/client.ts` — SoDEX mock fills and signed testnet REST client.
+- `tests/unit/risk.test.ts` — 7 tests.
+- `tests/unit/sodex.test.ts` — 5 tests (3 mock mode, 2 real-path tests with mocked `fetch`).
+- `package.json` / `package-lock.json` — added `viem@^2.57.11`.
+
+### Risk engine
+
+`evaluateRisk(context)` returns `{ approved, checks, approvedSizeUsd?, stopLossPct? }`.
+`checks` entries are `{ name, passed, value, reason? }`.
+
+- `decision === "NO_TRADE"` short-circuits to one failed `decision` check with
+  reason `Chief decided no trade`; no other checks are computed.
+- `data_confidence`: fails below `0.8` with `insufficient_data_confidence`.
+- `spread`: fails above `0.005` with `spread_too_wide`.
+- `depth`: fails below `$10,000` with `insufficient_liquidity`.
+- `ai_confidence`: fails below `0.6` with `low_ai_confidence`.
+- `position_size`: `approvedSizeUsd = portfolioBalanceUsd × 0.10`, capped at
+  `depthUsd × 0.10`; when capped, the check records `capped_by_depth`.
+- `stop_loss`: always passes with `0.05`.
+- On failure, `approvedSizeUsd` and `stopLossPct` are omitted. On approval,
+  `approvedSizeUsd` is the capped size and `stopLossPct` is `0.05`.
+- Risk remains fully deterministic and does not call the LLM.
+
+### SoDEX client behavior
+
+`placeOrders(legs, mock)` preserves leg order and returns
+`{ success, orderId?, legs, error? }`.
+
+- Mock mode: waits 500ms, returns one random UUID `orderId` per leg, each with
+  `status: "filled"`, and `success: true`.
+- Real mode: one signed POST per leg, processed sequentially. A batch UUID is
+  generated per call, sent as `X-Client-Order-ID`, and embedded in each order's
+  `clOrdID` (30 alphanumeric characters, unique per leg).
+- Requests time out after 10s. HTTP errors, timeouts, invalid JSON, non-zero
+  SoDEX response codes, per-order rejection codes, and signing/config errors all
+  return `success: false` with a structured `error` string. No secrets are logged.
+- Real mode does not retry automatically.
+- Tests use a fixed test private key and mocked `fetch`; they make no network calls.
+  Signatures are verified with viem's `verifyTypedData`.
+
+### SoDEX signing and payload (verified against docs + Python SDK)
+
+EIP-712 domain:
+
+- Spot: `name: "spot"`, `version: "1"`, `chainId: 138565`,
+  `verifyingContract: 0x0000000000000000000000000000000000000000`.
+- Perps: `name: "futures"`, same version/chain/contract.
+- Testnet chain ID is `138565`; mainnet is `286623`.
+- Type: `ExchangeAction(bytes32 payloadHash, uint64 nonce)`.
+
+Signing pipeline:
+
+1. Build `{ "type": <action>, "params": <params> }`.
+2. `payloadHash = keccak256(utf8(JSON.stringify(signingPayload)))` using compact
+   JSON. Field order matters; it must match the Go struct order.
+3. Sign the EIP-712 `ExchangeAction` with `payloadHash` and a millisecond nonce.
+4. Wire signature is `0x01 || 65-byte ECDSA signature` (66 bytes total).
+5. HTTP body is `params` only, **not** the `{ type, params }` signing wrapper.
+
+Headers:
+
+- `X-API-Key`: `SODEX_API_KEY_NAME`
+- `X-API-Sign`: `0x01...` wire signature
+- `X-API-Nonce`: decimal millisecond nonce
+- `X-API-Chain`: `138565`
+- `Content-Type: application/json`, `Accept: application/json`
+
+Spot order:
+
+- Endpoint: `POST /api/v1/spot/trade/orders/batch` (docs/SDK). The older
+  `/api/v1/spot/trade/orders` path is not the current batch endpoint.
+- Action: `batchNewOrder`.
+- Params field order:
+  `accountID`, `orders[]`; each order:
+  `symbolID`, `clOrdID`, `side`, `type`, `timeInForce`, `price?`, `quantity?`,
+  `funds?`.
+- Current client uses market orders: `type: 2`, `timeInForce: 3` (IOC), and
+  `funds` for the USD notional.
+
+Perps order:
+
+- Endpoint: `POST /api/v1/perps/trade/orders`.
+- Action: `newOrder`.
+- Params field order: `accountID`, `symbolID`, `orders[]`; each order:
+  `clOrdID`, `modifier`, `side`, `type`, `timeInForce`, `price?`, `quantity?`,
+  `funds?`, `stopPrice?`, `stopType?`, `triggerType?`, `reduceOnly`,
+  `positionSide`.
+- Current client uses `modifier: 1`, `type: 2`, `timeInForce: 3`,
+  `reduceOnly: false`, `positionSide: 1` (BOTH), and `funds`.
+
+Enums:
+
+- Side: BUY=`1`, SELL=`2`.
+- Type: LIMIT=`1`, MARKET=`2`.
+- Time in force: GTC=`1`, FOK=`2`, IOC=`3`, GTX=`4`.
+- Modifier: NORMAL=`1`.
+- Position side: BOTH=`1`, LONG=`2`, SHORT=`3`.
+
+Response:
+
+- Envelope: `{ code, timestamp, data?, error? }`; non-zero `code` is an error.
+- Order results are in `data[]`: `{ code, clOrdID, orderID?, error? }`.
+- Non-zero per-order `code` means rejection. The client maps accepted orders to
+  `status: "submitted"`.
+
+### Live-mode TODOs / discrepancies
+
+- `SODEX_ACCOUNT_ID` is validated by `lib/env.ts` as a UUID, but SoDEX signing
+  expects a numeric `uint64` `accountID`. The client currently rejects a
+  non-numeric value before sending. Phase 9 must reconcile the env value with the
+  numeric SoDEX trading account ID.
+- `OrderLeg.symbol` is a ticker (`btc`, `ssimag7`) in the pipeline, but SoDEX
+  order payloads require numeric `symbolID`s. The client currently requires
+  `leg.symbol` to be numeric in real mode. Phase 9 must add market metadata
+  resolution (or pass numeric IDs at the call site).
+- SoDEX docs allow `funds` only for market BUY. The client currently sends
+  `funds` for both sides. A live perps SHORT will require `quantity` (base asset)
+  derived from mark price and symbol precision. This is a Phase 9 blocker; do not
+  run live SHORT orders until resolved.
+- No live SoDEX call was made in Phase 5. Real-path tests use mocked `fetch`.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -196,9 +322,14 @@ the 0.5% tolerance.
 
 - **Phase 4 complete:** agents call OpenRouter at
   `https://openrouter.ai/api/v1` with model `openai/gpt-4o-mini`.
-- **Phase 5 verification needed:** confirm which MAG7 constituents have SoDEX
+- **Phase 5 complete:** risk engine and SoDEX mock/signed client are implemented;
+  `npm test` has 50 passing tests. No live SoDEX call was made.
+- **Phase 9 live verification:** confirm which MAG7 constituents have SoDEX
   perps. BTC/ETH/SOL confirmed; BNB/XRP/DOGE/HYPE open. If a constituent lacks a
   perp, the pipeline returns `NO_TRADE — no perp market`.
+- **Phase 9 SoDEX blockers:** `SODEX_ACCOUNT_ID` is a UUID in the env schema but
+  SoDEX expects a numeric `uint64`; real orders need numeric `symbolID`s; perps
+  SELL needs `quantity`, not `funds`. See the Phase 5 live-mode TODOs above.
 - **Phase 3 complete:** `R_index` is computed from `synthesizeIndexKlines`, not
   from `/indices/ssimag7/klines`.
 - **Phase 6:** the unique index on
@@ -219,9 +350,16 @@ the 0.5% tolerance.
   `OPENAI_API_KEY`, `OPERATOR_SECRET`.
 - `OPENROUTER_API_KEY` is used by the Phase 4 agents. `OPENAI_API_KEY` is still
   required by the Phase 1 env schema but is not used by the agents.
+- `SODEX_BASE_URL` should be the gateway host
+  (`https://testnet-gw.sodex.dev`); the client appends `/api/v1/...`.
+- `SODEX_ACCOUNT_ID` is currently a UUID in `lib/env.ts`, but SoDEX order signing
+  expects a numeric `uint64` account ID. Real mode fails closed until Phase 9
+  reconciles this.
+- `viem@^2.57.11` is installed for EIP-712 signing.
 - Optional: `Z_SCORE_THRESHOLD` (default 2.0), `TRACKING_ERROR_TOLERANCE`
   (default 0.02), `MAX_POSITION_PCT` (default 0.10), `MOCK_SODEX` (default
-  false).
+  false). `placeOrders` receives the mock flag from its caller; it does not read
+  `MOCK_SODEX` directly.
 
 ## Commands
 
@@ -246,11 +384,15 @@ npm run db:migrate
 
 ## Next task
 
-Implement **Phase 5 — Risk engine + SoDEX client** from `IMPLEMENTATION_PLAN.md`.
+Implement **Phase 6 — Orchestrator + API routes** from `IMPLEMENTATION_PLAN.md`.
 
-The Risk Engine will consume the `ChiefOutput` produced by
-`runChiefAgent`. It must check `decision === "SHORT"` before proceeding; any
-other value is `NO_TRADE`. The risk checks themselves remain deterministic and
-must not be delegated to the LLM. Phase 5 also adds the SoDEX client and the
-`MOCK_SODEX=true` simulated-fill path. Do not proceed to Phase 6 until Phase 5 is
+Phase 6 should wire the existing stages in order: data → validation → deviation →
+Bull/Bear/Chief → risk → execution, persisting each stage. Use
+`evaluateRisk` from `lib/pipeline/risk.ts` and `placeOrders(legs, mock)` from
+`lib/sodex/client.ts`. Pass the env `MOCK_SODEX` flag explicitly to
+`placeOrders`. Do not change the Phase 5 risk thresholds or signing logic.
+
+Phase 6 must catch PostgreSQL error `23505` from the unique index on
+`(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` and return the existing
+run / `409` instead of crashing. Do not proceed to Phase 7 until Phase 6 is
 verified and committed.
