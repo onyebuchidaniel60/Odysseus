@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current phase: **Phase 2 — SoSoValue client (complete)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines
+- Current phase: **Phase 3 — Validation gate + deviation engine (complete)**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine
 - Blocked by: none
-- Next task: Phase 3 — Validation gate + deviation engine (see `IMPLEMENTATION_PLAN.md`)
+- Next task: Phase 4 — LLM agents (see `IMPLEMENTATION_PLAN.md`)
 
 ## Project context
 
@@ -57,6 +57,55 @@ endpoints accept `ssimag7` case-insensitively. The project continues to use
 - `GET /indices/ssimag7/klines?interval=1d` returns `data: []` for all 13 indices
   and every valid range. The raw endpoint is not used.
 
+## Phase 3 findings — validation + deviation
+
+### Files
+
+- `lib/pipeline/validation.ts` — 5-check gate returning `passed`, `reason`, `trackingError`.
+- `lib/pipeline/deviation.ts` — 7 weight-deviation signals with rolling robust z-scores.
+- `tests/unit/pipeline.test.ts` — 14 tests using the Phase 2 fixtures plus synthetic series.
+
+### 30-day window convention
+
+The final kline in every series is treated as the current, possibly incomplete
+UTC day and excluded. When at least 31 complete closes are available, the gate
+and deviation engine use the last 31 closes (30 daily returns). The fixtures
+have 90 bars, so 89 complete closes are available and the fixture tracking error
+is `0.004175`, matching Phase 2.
+
+Edge case: the spec requires a constituent to have at least 30 klines, not 31.
+A series with exactly 30 raw bars leaves 29 complete closes after the incomplete
+day is removed. In that case the code uses the 29 usable closes (28 returns)
+rather than rejecting an otherwise valid 30-bar series. The `insufficient_kline_history`
+gate still triggers below 30 raw bars.
+
+The validation gate aligns all constituent series to the MAG7.ssi token as the
+reference and re-synthesizes the index from the aligned window. Tracking error is
+`|R_token - R_synth|` over that window. The token itself must also have at least
+30 klines; otherwise the gate returns `insufficient_kline_history`.
+
+### Z-score convention
+
+- Daily deviations are `weight_i × (R_i - R_index)` over the latest up-to-30
+  complete daily returns.
+- The robust z-score is computed for the latest deviation against the median and
+  MAD of the same up-to-30-day deviation window:
+  `z = (x - median) / (1.4826 × MAD)`.
+- If `MAD === 0`, the code falls back to population standard deviation. If the
+  standard deviation is also zero, `z = 0`.
+- The returned `constituentReturn` and `indexReturn` are the latest complete
+  daily returns, not cumulative 30-day returns. `weightDeviation` is the latest
+  day's deviation.
+- Signals are sorted descending by `|zScore|`. Equal absolute z-scores retain
+  constituent input order.
+
+### Notes
+
+- No Phase 2 code was modified.
+- The deviation engine throws `DeviationError` if a constituent is missing a
+  timestamp present in the synthetic index or has fewer than two complete
+  klines. The validation gate is expected to run first.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -107,8 +156,8 @@ the 0.5% tolerance.
 - **Phase 5 verification needed:** confirm which MAG7 constituents have SoDEX
   perps. BTC/ETH/SOL confirmed; BNB/XRP/DOGE/HYPE open. If a constituent lacks a
   perp, the pipeline returns `NO_TRADE — no perp market`.
-- **Phase 3:** compute `R_index` from `synthesizeIndexKlines`, not from
-  `/indices/ssimag7/klines`.
+- **Phase 3 complete:** `R_index` is computed from `synthesizeIndexKlines`, not
+  from `/indices/ssimag7/klines`.
 - **Phase 6:** the unique index on
   `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` will cause the second
   insert of the same day to fail with PostgreSQL error `23505`. The Phase 6
@@ -151,6 +200,13 @@ npm run db:migrate
 
 ## Next task
 
-Implement **Phase 3 — Validation gate + deviation engine** from
-`IMPLEMENTATION_PLAN.md`. Do not proceed to Phase 4 until Phase 3 is verified and
-committed.
+Implement **Phase 4 — LLM agents** from `IMPLEMENTATION_PLAN.md`.
+
+The Bull/Bear/Chief agents will receive the `DeviationSignal[]` array returned by
+`computeDeviations`. It is already sorted descending by `|zScore|`, so
+`signals[0]` is the top candidate. Phase 4 must pass that top signal correctly,
+apply the `|z| >= 2.0` threshold before invoking the agents, and return
+`NO_TRADE` when the top candidate is lagging. Keep the deterministic gate and
+deviation stages unchanged.
+
+Do not proceed to Phase 5 until Phase 4 is verified and committed.
