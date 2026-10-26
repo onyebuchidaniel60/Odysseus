@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { MockTone } from "./data";
+import type { MockTone } from "./types";
 
 export function cx(
   ...values: Array<string | false | null | undefined>
@@ -62,14 +62,17 @@ const toneGradient: Record<MockTone, string> = {
 export function Panel({
   children,
   className,
+  id,
 }: {
   children: ReactNode;
   className?: string;
+  id?: string;
 }) {
   return (
     <section
+      id={id}
       className={cx(
-        "min-w-0 rounded-[2px] border border-mockup-line bg-mockup-panel",
+        "min-w-0 scroll-mt-20 rounded-[2px] border border-mockup-line bg-mockup-panel",
         className,
       )}
     >
@@ -263,52 +266,6 @@ export function HeatTile({
           {zScore}
         </p>
       </div>
-    </div>
-  );
-}
-
-export function ViewSwitch({
-  view,
-  onChange,
-  className,
-}: {
-  view: "dashboard" | "detail";
-  onChange: (view: "dashboard" | "detail") => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cx(
-        "inline-flex items-center rounded-[2px] border border-mockup-line bg-mockup-panel p-0.5",
-        className,
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => onChange("dashboard")}
-        aria-pressed={view === "dashboard"}
-        className={cx(
-          "h-7 rounded-[1px] px-2.5 font-mockup-mono text-[9px] font-medium uppercase tracking-[0.14em] transition",
-          view === "dashboard"
-            ? "bg-mockup-amber/10 text-mockup-amber"
-            : "text-mockup-muted hover:text-mockup-text",
-        )}
-      >
-        Dashboard
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("detail")}
-        aria-pressed={view === "detail"}
-        className={cx(
-          "h-7 rounded-[1px] px-2.5 font-mockup-mono text-[9px] font-medium uppercase tracking-[0.14em] transition",
-          view === "detail"
-            ? "bg-mockup-amber/10 text-mockup-amber"
-            : "text-mockup-muted hover:text-mockup-text",
-        )}
-      >
-        Run Detail
-      </button>
     </div>
   );
 }
