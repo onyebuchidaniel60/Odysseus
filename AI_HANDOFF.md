@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current phase: **Phase 6 — Orchestrator + API routes (complete)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs
-- Blocked by: none for Phase 7. Live SoDEX execution has known config/data TODOs for Phase 9.
-- Next task: Phase 7 — Dashboard (see `IMPLEMENTATION_PLAN.md`)
+- Current phase: **Phase 7 — Dashboard (complete)**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs; Phase 7 — dashboard and run detail UI
+- Blocked by: none for Phase 8. Live SoDEX execution has known config/data TODOs for Phase 9.
+- Next task: Phase 8 — Replay + audit export polish (see `IMPLEMENTATION_PLAN.md`)
 
 ## Project context
 
@@ -387,6 +387,44 @@ producing a top overextended z-score of ~5.57 and zero tracking error. The
 fixture-based test uses the captured 90-bar series. All external calls are
 mocked; no network or database access occurs.
 
+## Phase 7 findings — dashboard UI
+
+### Files
+
+- `tailwind.config.ts` — design tokens: background `#0A0E17`, surface
+  `#131A2A`, foreground `#E6EDF7`, muted `#8B98B8`, accent `#4F8CFF`, success
+  `#2ED47A`, danger `#FF5C5C`, warning `#F5A623`; Inter UI and JetBrains Mono.
+- `app/globals.css` — dark terminal base, grid fade, focus and scrollbar styles.
+- `app/layout.tsx` — Inter + JetBrains Mono via `next/font/google`, metadata.
+- `app/page.tsx` — dashboard with run trigger and recent runs.
+- `app/runs/[id]/page.tsx` — run detail view.
+- `components/types.ts` — API/UI view types.
+- `components/format.ts` — formatting and class helpers.
+- `components/StatusBadge.tsx` — decision/validation badges.
+- `components/DeviationTable.tsx` — signals table with top-signal highlighting.
+- `components/AgentDebate.tsx` — Bull/Bear columns and wide Chief verdict.
+- `components/RiskChecklist.tsx` — deterministic risk checks and footer.
+- `components/AuditTimeline.tsx` — vertical persisted audit timeline.
+- `components/Spinner.tsx` — shared loading indicator.
+
+### Behavior
+
+- Dashboard loads `GET /api/runs` on mount and renders the latest 20 runs.
+- Operator secret is stored in `localStorage` under
+  `odysseus.operator-secret` and sent as `x-operator-key`.
+- Run Pipeline posts to `/api/run`, shows a loading state, refreshes the list on
+  success, and shows the exact `409` message `Run already exists for today`.
+- Empty state: `No runs yet. Click 'Run Pipeline' to start.`
+- Run rows are keyboard-accessible and navigate to `/runs/[id]`.
+- Detail page consumes the Phase 6 contract, renders snapshot metadata, status,
+  signals, agent debate, risk checklist, execution legs, and audit timeline.
+- Detail page has loading, error/retry, and not-found states.
+- `NO_TRADE` is amber, `SHORT` is blue, and validation `FAIL` is red.
+- No backend files or API response shapes were changed. No dependencies were
+  added.
+- Verification: `npm test` 57/57 passing, `npm run build` successful,
+  `npm run lint` clean. No Playwright/E2E run in this phase.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -441,6 +479,9 @@ the 0.5% tolerance.
 - **Phase 6 complete:** orchestrator and run APIs are implemented; `npm test`
   has 57 passing tests. The default risk context uses demo values until live
   account/order-book data is wired in Phase 9.
+- **Phase 7 complete:** dashboard and run detail UI are implemented against the
+  Phase 6 contracts. `npm test`, `npm run build`, and `npm run lint` pass. No
+  backend or API changes were made. No browser E2E was run in this phase.
 - **Phase 9 live verification:** confirm which MAG7 constituents have SoDEX
   perps. BTC/ETH/SOL confirmed; BNB/XRP/DOGE/HYPE open. If a constituent lacks a
   perp, the pipeline returns `NO_TRADE — no perp market`.
@@ -453,10 +494,9 @@ the 0.5% tolerance.
   `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` is handled as
   `RunAlreadyExistsError` / HTTP `409`. A run that fails after the snapshot
   insert still occupies that UTC day; retries must wait until the next day.
-- **Phase 7:** consume the API contracts documented above. `GET /api/runs`
-  returns `{ runs }`; `GET /api/runs/[id]` returns
-  `{ snapshot, signals, decision, riskCheck, execution, auditLog }`. Keep the
-  `NO_TRADE` outcome visually distinct (amber, not red).
+- **Phase 8:** implement the replay view for saved snapshots plus audit export
+  polish. Reuse the Phase 6 detail contract and Phase 7 components. Do not change
+  API response shapes or backend pipeline behavior without asking.
 - SoSoValue constituents endpoint returns no timestamp; weight freshness is
   assumed.
 - No historical weight series — backtests would use current weights (mitigated
@@ -505,13 +545,10 @@ npm run db:migrate
 
 ## Next task
 
-Implement **Phase 7 — Dashboard** from `IMPLEMENTATION_PLAN.md`.
+Implement **Phase 8 — Replay + audit export polish** from
+`IMPLEMENTATION_PLAN.md`.
 
-Phase 7 should replace the placeholder `app/page.tsx` with the single-screen
-pipeline view: deviation table, agent debate, decision card, risk checklist,
-execution status, and audit timeline. Add the run detail page and loading,
-empty, and error states. `NO_TRADE` must use an amber badge, not red.
-
-Consume the Phase 6 API contracts exactly as documented above. Do not change the
+Phase 8 should add the replay view for saved snapshots and polish audit export.
+Reuse the Phase 6 run-detail contract and Phase 7 components. Do not change the
 orchestrator, risk thresholds, SoDEX signing logic, or API response shapes
-without asking. Do not start Phase 8 automatically.
+without asking. Do not start Phase 9 automatically.

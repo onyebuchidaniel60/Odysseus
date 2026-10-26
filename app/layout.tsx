@@ -1,17 +1,32 @@
 import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
+
 import "./globals.css";
 
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "Odysseus",
-  description: "Autonomous SSI index-deviation trading agent",
+  title: "Odysseus — SSI Deviation Agent",
+  description:
+    "Autonomous SSI index-deviation trading agent for MAG7.ssi on SoDEX testnet.",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-slate-950 text-slate-100 antialiased">
+    <html lang="en" className={`${inter.variable} ${jetBrainsMono.variable}`}>
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         {children}
       </body>
     </html>
