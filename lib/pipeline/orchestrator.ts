@@ -52,8 +52,21 @@ export interface SnapshotInput {
   indexTicker: string;
   observedAt: Date;
   indexKlines: Kline[];
+  constituentKlines: Record<string, Kline[]>;
+  tokenKlines: Kline[];
   constituents: Constituent[];
+  replayOf: string | null;
   validationStatus: string;
+}
+
+export interface SnapshotData {
+  indexTicker: string;
+  observedAt: Date;
+  indexKlines: Kline[];
+  constituentKlines: Record<string, Kline[]>;
+  tokenKlines: Kline[];
+  constituents: Constituent[];
+  replayOf: string | null;
 }
 
 export interface SnapshotUpdate {
@@ -128,6 +141,12 @@ export interface RunPipelineOptions {
   now?: Date;
 }
 
+export interface ProcessSnapshotOptions {
+  mockSodex: boolean;
+  store?: PipelineStore;
+  riskContext?: Partial<Omit<RiskContext, "chiefDecision">>;
+}
+
 export class RunAlreadyExistsError extends Error {
   readonly runId?: string;
 
@@ -172,7 +191,10 @@ class DrizzlePipelineStore implements PipelineStore {
         indexTicker: input.indexTicker,
         observedAt: input.observedAt,
         indexKlines: input.indexKlines,
+        constituentKlines: input.constituentKlines,
+        tokenKlines: input.tokenKlines,
         constituents: input.constituents,
+        replayOf: input.replayOf,
         validationStatus: input.validationStatus,
       })
       .returning({ id: indexSnapshot.id });
@@ -370,34 +392,39 @@ async function logFailure(
   }
 }
 
-export async function runPipeline(
-  options: RunPipelineOptions,
+export async function processSnapshot(
+  data: SnapshotData,
+  options: ProcessSnapshotOptions,
 ): Promise<PipelineResult> {
   const store = options.store ?? new DrizzlePipelineStore();
-  const observedAt = options.now ?? new Date();
+  const {
+    indexTicker,
+    observedAt,
+    indexKlines: syntheticKlines,
+    constituentKlines,
+    tokenKlines,
+    constituents,
+    replayOf,
+  } = data;
   let runId: string | undefined;
 
   try {
-    const {
-      constituents,
-      constituentKlines,
-      tokenKlines,
-      syntheticKlines,
-    } = await loadMarketData();
-
     try {
       const snapshot = await store.createSnapshot({
-        indexTicker: INDEX_TICKER,
+        indexTicker,
         observedAt,
         indexKlines: syntheticKlines,
+        constituentKlines,
+        tokenKlines,
         constituents,
+        replayOf,
         validationStatus: "pending",
       });
       runId = snapshot.id;
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (replayOf === null && isUniqueViolation(error)) {
         const existingRunId = await store
-          .findRunIdForDay(INDEX_TICKER, observedAt)
+          .findRunIdForDay(indexTicker, observedAt)
           .catch(() => undefined);
         throw new RunAlreadyExistsError(existingRunId);
       }
@@ -406,9 +433,16 @@ export async function runPipeline(
     }
 
     await store.log(runId, "SNAPSHOT_CREATED", {
-      indexTicker: INDEX_TICKER,
+      indexTicker,
       observedAt: observedAt.toISOString(),
+      replayOf,
     });
+
+    if (replayOf) {
+      await store.log(runId, "REPLAY_STARTED", {
+        sourceSnapshotId: replayOf,
+      });
+    }
 
     const validation = validateData(
       constituents,
@@ -600,7 +634,7 @@ export async function runPipeline(
 
     const legs: OrderLeg[] = [
       { symbol: topSignal.signal.symbol, side: "SHORT", sizeUsd },
-      { symbol: INDEX_TICKER, side: "LONG", sizeUsd },
+      { symbol: indexTicker, side: "LONG", sizeUsd },
     ];
     const result = await placeOrders(legs, options.mockSodex);
     const clientOrderId =
@@ -665,6 +699,48 @@ export async function runPipeline(
     return {
       success: false,
       runId,
+      decision: "NO_TRADE",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function runPipeline(
+  options: RunPipelineOptions,
+): Promise<PipelineResult> {
+  const observedAt = options.now ?? new Date();
+
+  try {
+    const {
+      constituents,
+      constituentKlines,
+      tokenKlines,
+      syntheticKlines,
+    } = await loadMarketData();
+
+    return await processSnapshot(
+      {
+        indexTicker: INDEX_TICKER,
+        observedAt,
+        indexKlines: syntheticKlines,
+        constituentKlines,
+        tokenKlines,
+        constituents,
+        replayOf: null,
+      },
+      {
+        mockSodex: options.mockSodex,
+        store: options.store,
+        riskContext: options.riskContext,
+      },
+    );
+  } catch (error) {
+    if (error instanceof RunAlreadyExistsError) {
+      throw error;
+    }
+
+    return {
+      success: false,
       decision: "NO_TRADE",
       error: error instanceof Error ? error.message : String(error),
     };

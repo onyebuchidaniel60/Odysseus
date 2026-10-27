@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 import { Badge, cx } from "./primitives";
 
-type ActiveView = "dashboard" | "run";
+type ActiveView = "dashboard" | "run" | "replay";
 
 const repoUrl = "https://github.com/onyebuchidaniel60/Odysseus";
 const docsUrl = `${repoUrl}#readme`;
@@ -38,6 +38,12 @@ function buildNavGroups(
           href: "/dashboard",
           icon: "dashboard",
           active: active === "dashboard",
+        },
+        {
+          label: "Replay Engine",
+          href: "/replay",
+          icon: "clock",
+          active: active === "replay",
         },
         {
           label: "Run Detail",
@@ -240,8 +246,15 @@ export function AppTopBar() {
             Live API
           </Badge>
           <Link
+            href="/replay"
+            className="flex h-8 items-center gap-1.5 rounded-[2px] border border-mockup-line bg-mockup-panel px-3 font-mockup-mono text-[8px] uppercase tracking-[0.14em] text-mockup-muted transition hover:border-mockup-line-strong hover:text-mockup-text"
+          >
+            <Icon name="clock" className="h-3 w-3" />
+            Replay
+          </Link>
+          <Link
             href="/"
-            className="flex h-8 items-center rounded-[2px] border border-mockup-line bg-mockup-panel px-3 font-mockup-mono text-[8px] uppercase tracking-[0.14em] text-mockup-muted transition hover:border-mockup-line-strong hover:text-mockup-text"
+            className="hidden h-8 items-center rounded-[2px] border border-mockup-line bg-mockup-panel px-3 font-mockup-mono text-[8px] uppercase tracking-[0.14em] text-mockup-muted transition hover:border-mockup-line-strong hover:text-mockup-text sm:flex"
           >
             Landing
           </Link>

@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current phase: **Phase 7 — Dashboard (complete)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs; Phase 7 — dashboard and run detail UI
-- Blocked by: none for Phase 8. Live SoDEX execution has known config/data TODOs for Phase 9.
-- Next task: Phase 8 — Replay + audit export polish (see `IMPLEMENTATION_PLAN.md`)
+- Current phase: **Phase 8 — Replay + audit polish (complete)**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs; Phase 7 — dashboard and run detail UI; Phase 8 — replay API, replay page, and audit export
+- Blocked by: none for Phase 9. Live SoDEX execution has known config/data TODOs for Phase 9.
+- Next task: Phase 9 — Live testnet verification (see `IMPLEMENTATION_PLAN.md`)
 
 ## Project context
 
@@ -425,6 +425,51 @@ mocked; no network or database access occurs.
 - Verification: `npm test` 57/57 passing, `npm run build` successful,
   `npm run lint` clean. No Playwright/E2E run in this phase.
 
+## Phase 8 findings — replay + audit polish
+
+### Files
+
+- `app/api/run/replay/route.ts` — operator-authenticated replay endpoint.
+- `app/replay/page.tsx` — replay page with stored snapshot table and secret input.
+- `app/runs/[id]/page.tsx` — unchanged contract; now renders replay runs too.
+- `lib/pipeline/orchestrator.ts` — exports `processSnapshot(data, options)` and
+  delegates to it from `runPipeline()`.
+- `lib/db/schema.ts` — added `constituent_klines`, `token_klines`, and
+  `replay_of` to `index_snapshot`.
+- `drizzle/0001_wooden_aqueduct.sql` — adds replay columns and replaces the
+  daily unique index with a partial index for live runs.
+- `components/mockup/Shell.tsx` — adds `Replay Engine` sidebar and top-bar links.
+- `tests/unit/orchestrator.test.ts` — adds replay and same-decision tests.
+
+### Behavior
+
+- `processSnapshot()` owns the post-ingestion flow: snapshot persistence,
+  validation, deviation, agents, risk, execution, and audit logging.
+- `runPipeline()` fetches live SoSoValue data, then calls `processSnapshot()`
+  with `replayOf: null`.
+- `POST /api/run/replay` validates `x-operator-key`, accepts
+  `{ snapshotId }`, loads the stored snapshot, and calls `processSnapshot()`
+  with the stored `constituents`, `index_klines`, `constituent_klines`, and
+  `token_klines`. It never calls SoSoValue.
+- Replay creates a new `index_snapshot` row with `replay_of` set to the source
+  snapshot and returns `{ success: true, runId }`.
+- Replay execution is forced to `mockSodex: true` so Phase 8 cannot place live
+  SoDEX orders.
+- The daily unique index now applies only where `replay_of IS NULL`, so replays
+  can share the original `observed_at` without hitting the live run lock.
+- The existing pre-Phase-8 snapshot was backfilled with constituent and token
+  klines from SoSoValue and re-synthesized index klines. Legacy snapshots
+  without those columns return HTTP `422` with a clear error.
+- Replay page reads the operator secret from
+  `odysseus.operator-secret`, lists `GET /api/runs`, posts to
+  `/api/run/replay`, shows a spinner, and routes to `/runs/[newRunId]` on
+  success. Empty and error states link back to `/dashboard`.
+- Verified with a real replay: new run ID
+  `6743d413-74c4-461a-985f-52ad863bc17a`, decision `NO_TRADE` /
+  `below_z_score_threshold`, matching the original run.
+- Verification: `npm test` 59/59 passing, `npm run build` successful,
+  `npm run lint` clean.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -476,9 +521,9 @@ the 0.5% tolerance.
   `https://openrouter.ai/api/v1` with model `openai/gpt-4o-mini`.
 - **Phase 5 complete:** risk engine and SoDEX mock/signed client are implemented.
   No live SoDEX call was made.
-- **Phase 6 complete:** orchestrator and run APIs are implemented; `npm test`
-  has 57 passing tests. The default risk context uses demo values until live
-  account/order-book data is wired in Phase 9.
+- **Phase 6 complete:** orchestrator and run APIs are implemented. The default
+  risk context uses demo values until live account/order-book data is wired in
+  Phase 9.
 - **Phase 7 complete:** dashboard and run detail UI are implemented against the
   Phase 6 contracts. `npm test`, `npm run build`, and `npm run lint` pass. No
   backend or API changes were made. No browser E2E was run in this phase.
@@ -490,13 +535,15 @@ the 0.5% tolerance.
   SELL needs `quantity`, not `funds`. See the Phase 5 live-mode TODOs above.
 - **Phase 3 complete:** `R_index` is computed from `synthesizeIndexKlines`, not
   from `/indices/ssimag7/klines`.
-- **Phase 6 run lock:** the unique index on
-  `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC'))` is handled as
-  `RunAlreadyExistsError` / HTTP `409`. A run that fails after the snapshot
-  insert still occupies that UTC day; retries must wait until the next day.
-- **Phase 8:** implement the replay view for saved snapshots plus audit export
-  polish. Reuse the Phase 6 detail contract and Phase 7 components. Do not change
-  API response shapes or backend pipeline behavior without asking.
+- **Phase 6 run lock:** the partial unique index on
+  `(index_ticker, DATE(observed_at AT TIME ZONE 'UTC')) WHERE replay_of IS NULL`
+  is handled as `RunAlreadyExistsError` / HTTP `409`. A live run that fails after
+  the snapshot insert still occupies that UTC day; retries must wait until the
+  next day. Replay runs are exempt.
+- **Phase 8 complete:** replay API, replay page, sidebar navigation, and
+  replay-capable snapshot storage are implemented. Replay uses stored klines,
+  skips SoSoValue ingestion, and runs mock execution only. Legacy snapshots
+  without replay columns return HTTP `422`.
 - SoSoValue constituents endpoint returns no timestamp; weight freshness is
   assumed.
 - No historical weight series — backtests would use current weights (mitigated
@@ -545,10 +592,11 @@ npm run db:migrate
 
 ## Next task
 
-Implement **Phase 8 — Replay + audit export polish** from
+Implement **Phase 9 — Live testnet verification** from
 `IMPLEMENTATION_PLAN.md`.
 
-Phase 8 should add the replay view for saved snapshots and polish audit export.
-Reuse the Phase 6 run-detail contract and Phase 7 components. Do not change the
-orchestrator, risk thresholds, SoDEX signing logic, or API response shapes
-without asking. Do not start Phase 9 automatically.
+Phase 9 must reconcile `SODEX_ACCOUNT_ID` with the numeric `uint64` SoDEX
+account ID, resolve ticker symbols to numeric `symbolID`s, and fix perps SELL
+orders to send `quantity` instead of `funds`. Confirm which MAG7 constituents
+have perps before placing live orders. Do not start Phase 9 automatically until
+the operator verifies Phase 8.

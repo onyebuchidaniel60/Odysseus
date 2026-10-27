@@ -17,17 +17,22 @@ export const indexSnapshot = pgTable(
     indexTicker: text("index_ticker").notNull(),
     observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
     indexKlines: jsonb("index_klines").notNull(),
+    constituentKlines: jsonb("constituent_klines"),
+    tokenKlines: jsonb("token_klines"),
     constituents: jsonb("constituents").notNull(),
+    replayOf: uuid("replay_of"),
     validationStatus: text("validation_status").notNull(),
     validationReason: text("validation_reason"),
     trackingError: numeric("tracking_error"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (table) => [
-    uniqueIndex("idx_run_per_day").on(
-      table.indexTicker,
-      sql`DATE(${table.observedAt} AT TIME ZONE 'UTC')`,
-    ),
+    uniqueIndex("idx_run_per_day")
+      .on(
+        table.indexTicker,
+        sql`DATE(${table.observedAt} AT TIME ZONE 'UTC')`,
+      )
+      .where(sql`${table.replayOf} IS NULL`),
   ],
 );
 

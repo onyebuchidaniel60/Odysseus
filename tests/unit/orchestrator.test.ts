@@ -25,6 +25,7 @@ import {
   runChiefAgent,
 } from "@/lib/pipeline/agents";
 import {
+  processSnapshot,
   RunAlreadyExistsError,
   runPipeline,
   type DecisionInput,
@@ -278,6 +279,13 @@ describe("runPipeline", () => {
       decision: "SHORT",
     });
     expect(store.snapshots).toHaveLength(1);
+    expect(store.snapshots[0]?.input.replayOf).toBeNull();
+    expect(store.snapshots[0]?.input.constituentKlines).toEqual(
+      market.klinesBySymbol,
+    );
+    expect(store.snapshots[0]?.input.tokenKlines).toBe(
+      market.syntheticKlines,
+    );
     expect(store.snapshotUpdates[0]?.update.validationStatus).toBe("passed");
     expect(store.signals).toHaveLength(7);
     expect(store.signals[0]?.signal.symbol).toBe("btc");
@@ -320,6 +328,75 @@ describe("runPipeline", () => {
         "ORDER_PLACED",
         "RUN_COMPLETED",
       ]),
+    );
+  });
+
+  it("replays a stored snapshot without SoSoValue ingestion", async () => {
+    const store = new FakeStore();
+    const result = await processSnapshot(
+      {
+        indexTicker: "ssimag7",
+        observedAt: new Date("2025-06-01T12:00:00.000Z"),
+        indexKlines: market.syntheticKlines,
+        constituentKlines: market.klinesBySymbol,
+        tokenKlines: market.syntheticKlines,
+        constituents: market.constituents,
+        replayOf: "source-snapshot",
+      },
+      {
+        mockSodex: true,
+        store,
+      },
+    );
+
+    expect(result).toEqual({
+      success: true,
+      runId: "snapshot-1",
+      decision: "SHORT",
+    });
+    expect(store.snapshots[0]?.input.replayOf).toBe("source-snapshot");
+    expect(store.snapshots[0]?.input.indexKlines).toBe(
+      market.syntheticKlines,
+    );
+    expect(store.snapshots[0]?.input.constituentKlines).toBe(
+      market.klinesBySymbol,
+    );
+    expect(store.snapshots[0]?.input.tokenKlines).toBe(
+      market.syntheticKlines,
+    );
+    expect(store.signals).toHaveLength(7);
+    expect(store.decisions[0]?.input.finalDecision).toBe("SHORT");
+    expect(store.audit.map((entry) => entry.eventType)).toEqual(
+      expect.arrayContaining(["SNAPSHOT_CREATED", "REPLAY_STARTED"]),
+    );
+    expect(vi.mocked(listIndices)).not.toHaveBeenCalled();
+    expect(vi.mocked(getConstituents)).not.toHaveBeenCalled();
+    expect(vi.mocked(getCurrencyKlines)).not.toHaveBeenCalled();
+  });
+
+  it("produces the same decision on replay as the original run", async () => {
+    const liveStore = new FakeStore();
+    const live = await runPipeline(runOptions(liveStore));
+    const replayStore = new FakeStore();
+    const replay = await processSnapshot(
+      {
+        indexTicker: "ssimag7",
+        observedAt: new Date("2025-06-01T12:00:00.000Z"),
+        indexKlines: market.syntheticKlines,
+        constituentKlines: market.klinesBySymbol,
+        tokenKlines: market.syntheticKlines,
+        constituents: market.constituents,
+        replayOf: live.runId ?? "source-snapshot",
+      },
+      {
+        mockSodex: true,
+        store: replayStore,
+      },
+    );
+
+    expect(replay.decision).toBe(live.decision);
+    expect(replayStore.decisions[0]?.input.finalDecision).toBe(
+      liveStore.decisions[0]?.input.finalDecision,
     );
   });
 
