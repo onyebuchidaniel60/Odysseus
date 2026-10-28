@@ -295,6 +295,7 @@ describe("runPipeline", () => {
     expect(store.riskChecks[0]?.input.approved).toBe(true);
     expect(store.executions).toHaveLength(1);
     expect(store.executions[0]?.input.status).toBe("filled");
+    expect(store.executions[0]?.input.executionMode).toBe("MOCK");
     expect(store.executions[0]?.input.legs).toEqual([
       {
         symbol: "btc",
@@ -302,6 +303,7 @@ describe("runPipeline", () => {
         sizeUsd: 10_000,
         orderId: "leg-1",
         status: "filled",
+        mode: "mock",
       },
       {
         symbol: "ssimag7",
@@ -309,6 +311,7 @@ describe("runPipeline", () => {
         sizeUsd: 10_000,
         orderId: "leg-2",
         status: "filled",
+        mode: "mock",
       },
     ]);
     expect(vi.mocked(placeOrders)).toHaveBeenCalledWith(
@@ -532,6 +535,43 @@ describe("runPipeline", () => {
     });
     expect(store.executions).toHaveLength(0);
     expect(vi.mocked(placeOrders)).not.toHaveBeenCalled();
+  });
+
+  it("records a paper spot fill while the real perps leg stays filled", async () => {
+    vi.mocked(placeOrders).mockResolvedValue({
+      success: true,
+      orderId: "order-2",
+      executionMode: "PAPER_SPOT",
+      legs: [
+        { symbol: "btc", orderId: "perp-1", status: "filled", mode: "live" },
+        {
+          symbol: "ssimag7",
+          orderId: "paper_spot_1",
+          status: "filled",
+          mode: "paper",
+        },
+      ],
+    });
+    const store = new FakeStore();
+    const result = await runPipeline({
+      ...runOptions(store),
+      mockSodex: false,
+    });
+
+    expect(result).toMatchObject({ success: true, decision: "SHORT" });
+    expect(store.executions[0]?.input.status).toBe("filled");
+    expect(store.executions[0]?.input.executionMode).toBe("PAPER_SPOT");
+    expect(store.executions[0]?.input.legs[1]?.mode).toBe("paper");
+    expect(store.audit).toContainEqual({
+      runId: "snapshot-1",
+      eventType: "PAPER_SPOT_FILL",
+      payload: {
+        symbol: "ssimag7",
+        sizeUsd: 10_000,
+        orderId: "paper_spot_1",
+        reason: "no_spot_liquidity",
+      },
+    });
   });
 
   it("returns an execution failure and records the failed order", async () => {

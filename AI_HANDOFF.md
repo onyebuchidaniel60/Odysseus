@@ -2,10 +2,11 @@
 
 ## Current status
 
-- Current phase: **Phase 8 — Replay + audit polish (complete)**
+- Current phase: **Phase 9 — Live testnet verification (blocked)**
 - Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs; Phase 7 — dashboard and run detail UI; Phase 8 — replay API, replay page, and audit export
-- Blocked by: none for Phase 9. Live SoDEX execution has known config/data TODOs for Phase 9.
-- Next task: Phase 9 — Live testnet verification (see `IMPLEMENTATION_PLAN.md`)
+- Phase 9 progress: live SoDEX auth, symbol resolution, perps sizing, mark prices, liquidity preflight, order-status reconciliation, and the `ALLOW_PAPER_SPOT` fallback are implemented and tested. Real perps fills were confirmed. A complete pipeline execution is still blocked because the Chief returns `NO_TRADE` for the current HYPE signal and the index spot book has no asks.
+- Blocked by: Chief decision quality (HYPE weight is only 0.83%, so the Bear argues execution risk is unacceptable) and `vMAG7ssi_vUSDC` spot liquidity (0 asks).
+- Next task: operator decision on whether to adjust the agent prompt/strategy or wait for a signal the Chief approves. Do not start Phase 10.
 
 ## Project context
 
@@ -470,6 +471,120 @@ mocked; no network or database access occurs.
 - Verification: `npm test` 59/59 passing, `npm run build` successful,
   `npm run lint` clean.
 
+## Phase 9 findings — live testnet verification
+
+### Files changed
+
+- `lib/sodex/client.ts` — live market-symbol resolution, mark-price sizing,
+  normalized EIP-712 signatures, spot-ask preflight, order-status
+  reconciliation, and the zero-ask paper spot fallback.
+- `lib/env.ts` — `SODEX_API_KEY_PRIVATE_KEY` rename, numeric `uint64`
+  `SODEX_ACCOUNT_ID`, and `ALLOW_PAPER_SPOT` flag.
+- `.env.example` — updated env names, numeric account example, paper-spot flag.
+- `app/api/run/route.ts` — uses validated `getEnv().MOCK_SODEX`.
+- `lib/pipeline/orchestrator.ts` — persists `execution_mode`, marks paper legs,
+  logs `PAPER_SPOT_FILL`, and only reports `filled` when every leg is filled.
+- `lib/db/schema.ts`, `drizzle/0002_demonic_wilson_fisk.sql` — nullable
+  `execution.execution_mode` column.
+- `components/types.ts`, `components/mockup/DashboardView.tsx`,
+  `components/mockup/RunDetailView.tsx` — display `PAPER SPOT` and per-leg
+  `PAPER` badges.
+- `register-api-key.ts` — operator-only `UserSignedAddAPIKeyAction` registration
+  script. Reads both private keys from the environment; no keys are committed.
+- `tests/unit/env.test.ts`, `tests/unit/sodex.test.ts`,
+  `tests/unit/orchestrator.test.ts` — updated and expanded coverage.
+
+### SoDEX configuration
+
+- Base URL: `https://testnet-gw.sodex.dev`
+- Chain ID: `138565`
+- Master wallet: `0x69461740214a68d34157b3A14f513fA47f9a08E0`
+- Trading account ID: `60504` (numeric `uint64`, not a UUID)
+- Registered API key name: `odysseus-live`
+- API key public address:
+  `0xf08613ee86cF9bCCCdDD361BB89116680C05f942`
+- The API key is visible in both spot and perps.
+- Private keys live only in `.env.local`; `.env.*` is gitignored.
+
+### Live execution fixes
+
+- Ticker resolution maps pipeline tickers to SoDEX markets:
+  `ssimag7` → `vMAG7ssi_vUSDC` (spot), `btc` → `BTC-USD`, and so on.
+- Perps SHORT orders are sized by mark price and symbol precision, then bumped
+  to `minNotional` when needed. Spot LONG orders continue to use `funds`.
+- Mark prices come from `/perps/markets/mark-prices`; the older tickers endpoint
+  omitted XRP and DOGE.
+- Before any live order, every LONG spot leg is checked against the spot ask
+  book. If ask notional is below the intended size, the whole batch aborts so a
+  naked perp short is never placed.
+- After submission, each order is reconciled through
+  `/accounts/{address}/orders/history`. Terminal `canceled`, `expired`, and
+  `rejected` statuses make execution fail. `new` is normalized to `submitted`.
+
+### Paper spot fallback
+
+`ALLOW_PAPER_SPOT` defaults to `false`. When it is `true` and a spot leg has
+**zero asks**, the client:
+
+1. Logs `Spot leg has no liquidity. Simulating paper fill.`
+2. Generates `paper_spot_<uuid>` with status `filled`.
+3. Continues to execute the real constituent perps leg.
+
+The execution row records `execution_mode = "PAPER_SPOT"`, the paper leg records
+`mode: "paper"`, and the audit log records a `PAPER_SPOT_FILL` event. The run
+detail UI shows `PAPER SPOT` and a `PAPER` badge on the leg. If asks exist but
+notional is insufficient, the batch still aborts; paper mode is only for a truly
+empty book. With the flag off, the safe behavior is
+`NO_TRADE — insufficient_spot_liquidity`.
+
+### Real testnet evidence
+
+Direct smoke orders against SoDEX testnet:
+
+| Leg | Order ID | Result |
+| --- | --- | --- |
+| ETH perp SHORT | `3148777249` | filled |
+| SOL perp SHORT | `3148777325` | filled |
+| HYPE perp SHORT | `3148778098` | filled |
+| BNB perp SHORT | `3148777533` | canceled |
+| Index spot LONG | `1301098655` | canceled, `executedQty: "0"` |
+
+Current testnet positions after the smoke tests: ETH `-0.0044`, SOL `-0.1`,
+HYPE `-0.13`; perps equity about `19.22 vUSDC`; spot balance about
+`68.01 vUSDC`.
+
+### Live pipeline runs
+
+- `743fe821-cab6-429e-9273-55d706dfe29d` (Oct 28): validation passed with
+  tracking error `0.004153308874498163`; top signal HYPE, z-score
+  `2.5761850246333817`; Chief returned `NO_TRADE` / `chief_no_trade`.
+- `2a073430-3654-49e4-8115-58e957d6ea35` (replay of the same snapshot, live
+  execution enabled): also `NO_TRADE` / `chief_no_trade`.
+- No `execution` row was created for either run. No trade was forced.
+
+The Bear argued that HYPE's weight (`0.0083`) makes the execution risk
+unacceptable, and the Chief agreed at confidence `0.85`. The Bull's argument was
+strong but its live `confidence` field was `0`, which weakens the Bull case. This
+is an agent-quality issue, not an execution-path failure.
+
+### Spot market state
+
+- `vMAG7ssi_vUSDC` (symbol ID `3`): 2 bids, 0 asks at the time of the run.
+- `tMAG7ssi_vUSDC` and `tsMAG7ssi_vUSDC`: no book.
+- `vUSSI_vUSDC`: no asks.
+- Spot account holds only `vUSDC` and a small `vBTC` balance; no `vMAG7.ssi`
+  tokens are available to seed the book.
+
+### Verification
+
+- `npm run typecheck` — passed.
+- `npm test` — 69 tests passing.
+- `npm run build` — passed.
+- `npm run lint` — clean.
+- `npm run db:migrate` — applied `0002_demonic_wilson_fisk.sql`.
+
+
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -527,12 +642,20 @@ the 0.5% tolerance.
 - **Phase 7 complete:** dashboard and run detail UI are implemented against the
   Phase 6 contracts. `npm test`, `npm run build`, and `npm run lint` pass. No
   backend or API changes were made. No browser E2E was run in this phase.
-- **Phase 9 live verification:** confirm which MAG7 constituents have SoDEX
-  perps. BTC/ETH/SOL confirmed; BNB/XRP/DOGE/HYPE open. If a constituent lacks a
-  perp, the pipeline returns `NO_TRADE — no perp market`.
-- **Phase 9 SoDEX blockers:** `SODEX_ACCOUNT_ID` is a UUID in the env schema but
-  SoDEX expects a numeric `uint64`; real orders need numeric `symbolID`s; perps
-  SELL needs `quantity`, not `funds`. See the Phase 5 live-mode TODOs above.
+- **Phase 9 partial:** live SoDEX auth, market resolution, perps sizing, mark
+  prices, spot preflight, order-status reconciliation, and the paper spot
+  fallback are implemented. Real perps fills: ETH `3148777249`, SOL `3148777325`,
+  HYPE `3148778098`. A complete two-leg pipeline execution is still blocked.
+- **Phase 9 decision blocker:** on the Oct 28 snapshot the top signal was HYPE
+  (z `2.576`), but the Chief returned `NO_TRADE` because the Bear argued HYPE's
+  `0.0083` weight makes execution risk unacceptable. The Bull's live confidence
+  was `0`, which weakens its case. Do not force a trade to satisfy the demo.
+- **Phase 9 liquidity blocker:** `vMAG7ssi_vUSDC` has 0 asks. With
+  `ALLOW_PAPER_SPOT="true"` the spot leg becomes a paper fill and the real perps
+  leg can run; with the flag off the batch aborts safely.
+- **Phase 9 UI:** run detail shows `execution_mode` and per-leg `PAPER` badges.
+  No live run has reached execution yet, so the mixed real/paper UI has only
+  been exercised by unit tests, not by a persisted live run.
 - **Phase 3 complete:** `R_index` is computed from `synthesizeIndexKlines`, not
   from `/indices/ssimag7/klines`.
 - **Phase 6 run lock:** the partial unique index on
@@ -552,21 +675,25 @@ the 0.5% tolerance.
 ## Environment
 
 - See `ARCHITECTURE.md` §Stack and `PROJECT_SPEC.md` §Security.
-- Env vars required: `DATABASE_URL`, `SOSO_API_KEY`, `SODEX_PRIVATE_KEY`,
-  `SODEX_API_KEY_NAME`, `SODEX_ACCOUNT_ID`, `OPENROUTER_API_KEY`,
-  `OPENAI_API_KEY`, `OPERATOR_SECRET`.
+- Env vars required: `DATABASE_URL`, `SOSO_API_KEY`,
+  `SODEX_API_KEY_PRIVATE_KEY`, `SODEX_API_KEY_NAME`, `SODEX_ACCOUNT_ID`,
+  `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `OPERATOR_SECRET`.
 - `OPENROUTER_API_KEY` is used by the Phase 4 agents. `OPENAI_API_KEY` is still
   required by the Phase 1 env schema but is not used by the agents.
 - `SODEX_BASE_URL` should be the gateway host
   (`https://testnet-gw.sodex.dev`); the client appends `/api/v1/...`.
-- `SODEX_ACCOUNT_ID` is currently a UUID in `lib/env.ts`, but SoDEX order signing
-  expects a numeric `uint64` account ID. Real mode fails closed until Phase 9
-  reconciles this.
-- `viem@^2.57.11` is installed for EIP-712 signing.
+- `SODEX_ACCOUNT_ID` is a numeric `uint64` string (`60504` on testnet), not a
+  UUID. `SODEX_API_KEY_PRIVATE_KEY` is the registered API key's private key, not
+  the master wallet key.
+- `viem@^2.57.12` and `tsx@^4.23.15` are installed.
 - Optional: `Z_SCORE_THRESHOLD` (default 2.0), `TRACKING_ERROR_TOLERANCE`
   (default 0.02), `MAX_POSITION_PCT` (default 0.10), `MOCK_SODEX` (default
-  false). `placeOrders` receives the mock flag from its caller; it does not read
-  `MOCK_SODEX` directly.
+  false), `ALLOW_PAPER_SPOT` (default false). `placeOrders` receives the mock
+  flag from its caller; it does not read `MOCK_SODEX` directly. Paper spot is
+  read inside `placeOrders` via `getEnv()`.
+- The operator-only `register-api-key.ts` script expects `ACCOUNT_ID`,
+  `SODEX_API_KEY_NAME`, `SODEX_MASTER_PRIVATE_KEY`, and
+  `SODEX_API_KEY_PRIVATE_KEY` in the environment. Never commit those values.
 
 ## Commands
 
@@ -592,11 +719,19 @@ npm run db:migrate
 
 ## Next task
 
-Implement **Phase 9 — Live testnet verification** from
-`IMPLEMENTATION_PLAN.md`.
+Phase 9 remains **blocked** pending an operator decision.
 
-Phase 9 must reconcile `SODEX_ACCOUNT_ID` with the numeric `uint64` SoDEX
-account ID, resolve ticker symbols to numeric `symbolID`s, and fix perps SELL
-orders to send `quantity` instead of `funds`. Confirm which MAG7 constituents
-have perps before placing live orders. Do not start Phase 9 automatically until
-the operator verifies Phase 8.
+The live execution path is ready, but the Oct 28 pipeline run returned
+`NO_TRADE` / `chief_no_trade` before execution. The index spot market also has
+0 asks, so `ALLOW_PAPER_SPOT="true"` is required for a demo run. Do not force a
+trade, lower the z-score threshold, or change agent prompts without explicit
+approval. Do not start Phase 10.
+
+Options for the operator:
+
+1. Accept the `NO_TRADE` run as the Phase 9 pipeline evidence and treat the
+   direct perps fills plus unit-tested paper fallback as sufficient.
+2. Approve an agent-prompt fix for the Bull's `confidence` field and re-run on a
+   future day/snapshot.
+3. Wait for a snapshot whose top signal the Chief approves, then run the full
+   pipeline with `ALLOW_PAPER_SPOT="true"`.

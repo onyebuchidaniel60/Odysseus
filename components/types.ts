@@ -95,6 +95,7 @@ export interface ExecutionLegView {
   sizeUsd: NumericValue;
   orderId: string | null;
   status: string;
+  mode?: string | null;
 }
 
 export interface ExecutionView {
@@ -104,6 +105,7 @@ export interface ExecutionView {
   legs: ExecutionLegView[];
   clientOrderId: string;
   status: string;
+  executionMode: string | null;
   createdAt: string | null;
 }
 

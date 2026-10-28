@@ -102,6 +102,7 @@ export interface RiskCheckInput {
 export interface ExecutionLeg extends OrderLeg {
   orderId: string | null;
   status: string;
+  mode?: "live" | "paper" | "mock";
 }
 
 export interface ExecutionInput {
@@ -110,6 +111,7 @@ export interface ExecutionInput {
   legs: ExecutionLeg[];
   clientOrderId: string;
   status: string;
+  executionMode?: string;
 }
 
 export interface PipelineStore {
@@ -301,6 +303,7 @@ class DrizzlePipelineStore implements PipelineStore {
         legs: input.legs,
         clientOrderId: input.clientOrderId,
         status: input.status,
+        executionMode: input.executionMode ?? null,
       })
       .returning({ id: execution.id });
 
@@ -644,7 +647,11 @@ export async function processSnapshot(
       orderId: result.legs[index]?.orderId ?? null,
       status:
         result.legs[index]?.status ?? (result.success ? "submitted" : "failed"),
+      mode:
+        result.legs[index]?.mode ?? (options.mockSodex ? "mock" : "live"),
     }));
+    const executionMode =
+      result.executionMode ?? (options.mockSodex ? "MOCK" : "LIVE");
 
     const executionStatus = result.success
       ? options.mockSodex ||
@@ -659,7 +666,19 @@ export async function processSnapshot(
       legs: executionLegs,
       clientOrderId,
       status: executionStatus,
+      executionMode,
     });
+
+    if (executionMode === "PAPER_SPOT") {
+      for (const leg of executionLegs.filter((entry) => entry.mode === "paper")) {
+        await store.log(runId, "PAPER_SPOT_FILL", {
+          symbol: leg.symbol,
+          sizeUsd: leg.sizeUsd,
+          orderId: leg.orderId,
+          reason: "no_spot_liquidity",
+        });
+      }
+    }
 
     if (!result.success) {
       const error = result.error ?? "execution_failed";

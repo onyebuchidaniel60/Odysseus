@@ -2,17 +2,23 @@ import { keccak256, toHex, verifyTypedData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { TEST_PRIVATE_KEY } = vi.hoisted(() => ({
-  TEST_PRIVATE_KEY: `0x${"11".repeat(32)}`,
-}));
+const { TEST_PRIVATE_KEY, MOCK_ENV } = vi.hoisted(() => {
+  const privateKey = `0x${"11".repeat(32)}`;
+
+  return {
+    TEST_PRIVATE_KEY: privateKey,
+    MOCK_ENV: {
+      SODEX_ACCOUNT_ID: "1001",
+      SODEX_API_KEY_PRIVATE_KEY: privateKey,
+      SODEX_API_KEY_NAME: "test-key",
+      SODEX_BASE_URL: "https://testnet-gw.sodex.dev",
+      ALLOW_PAPER_SPOT: false,
+    },
+  };
+});
 
 vi.mock("@/lib/env", () => ({
-  getEnv: vi.fn(() => ({
-    SODEX_ACCOUNT_ID: "1001",
-    SODEX_API_KEY_PRIVATE_KEY: TEST_PRIVATE_KEY,
-    SODEX_API_KEY_NAME: "test-key",
-    SODEX_BASE_URL: "https://testnet-gw.sodex.dev",
-  })),
+  getEnv: vi.fn(() => MOCK_ENV),
 }));
 
 import { placeOrders } from "@/lib/sodex/client";
@@ -145,7 +151,9 @@ describe("placeOrders (mock mode)", () => {
     expect(result.legs[0]).toMatchObject({
       symbol: "btc",
       status: "filled",
+      mode: "mock",
     });
+    expect(result.executionMode).toBe("MOCK");
     expect(result.legs[0].orderId).toMatch(UUID_PATTERN);
   });
 
@@ -192,6 +200,7 @@ describe("placeOrders (mock mode)", () => {
 
 describe("placeOrders (real mode)", () => {
   afterEach(() => {
+    MOCK_ENV.ALLOW_PAPER_SPOT = false;
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -231,7 +240,7 @@ describe("placeOrders (real mode)", () => {
     expect(result.success).toBe(true);
     expect(result.orderId).toMatch(UUID_PATTERN);
     expect(result.legs).toEqual([
-      { symbol: "btc", orderId: "98765", status: "filled" },
+      { symbol: "btc", orderId: "98765", status: "filled", mode: "live" },
     ]);
 
     const orderCall = fetchMock.mock.calls.find(([input]) =>
@@ -319,7 +328,7 @@ describe("placeOrders (real mode)", () => {
 
     expect(result.success).toBe(true);
     expect(result.legs).toEqual([
-      { symbol: "ssimag7", orderId: "55555", status: "filled" },
+      { symbol: "ssimag7", orderId: "55555", status: "filled", mode: "live" },
     ]);
 
     const orderCall = fetchMock.mock.calls.find(([input]) =>
@@ -396,7 +405,7 @@ describe("placeOrders (real mode)", () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe("sodex_order_not_filled:btc:canceled");
     expect(result.legs).toEqual([
-      { symbol: "btc", orderId: "12345", status: "canceled" },
+      { symbol: "btc", orderId: "12345", status: "canceled", mode: "live" },
     ]);
   });
 
@@ -466,6 +475,113 @@ describe("placeOrders (real mode)", () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe(
       "sodex_insufficient_spot_liquidity:vMAG7ssi_vUSDC:0.00",
+    );
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/trade/orders"),
+      ),
+    ).toBe(false);
+  });
+
+  it("paper-fills a zero-ask spot leg and still executes the perps leg", async () => {
+    MOCK_ENV.ALLOW_PAPER_SPOT = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/spot/markets/symbols")) {
+        return jsonResponse({ code: 0, data: SPOT_SYMBOLS });
+      }
+      if (url.includes("/spot/markets/vMAG7ssi_vUSDC/orderbook")) {
+        return jsonResponse({ code: 0, data: { asks: [] } });
+      }
+      if (url.endsWith("/perps/markets/symbols")) {
+        return jsonResponse({ code: 0, data: PERPS_SYMBOLS });
+      }
+      if (url.endsWith("/perps/markets/mark-prices")) {
+        return jsonResponse({
+          code: 0,
+          data: [{ symbol: "BTC-USD", markPrice: "80000" }],
+        });
+      }
+      if (url.endsWith("/perps/trade/orders")) {
+        return orderResponse(98_765);
+      }
+      if (url.includes("/perps/accounts/") && url.includes("/orders/history")) {
+        return jsonResponse({
+          code: 0,
+          data: [{ orderID: 98_765, status: "FILLED" }],
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await placeOrders(
+      [
+        { symbol: "btc", side: "SHORT", sizeUsd: 10 },
+        { symbol: "ssimag7", side: "LONG", sizeUsd: 10 },
+      ],
+      false,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.executionMode).toBe("PAPER_SPOT");
+    expect(result.legs).toHaveLength(2);
+    expect(result.legs[0]).toEqual({
+      symbol: "btc",
+      orderId: "98765",
+      status: "filled",
+      mode: "live",
+    });
+    expect(result.legs[1]).toMatchObject({
+      symbol: "ssimag7",
+      status: "filled",
+      mode: "paper",
+    });
+    expect(result.legs[1]?.orderId).toMatch(/^paper_spot_/);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/spot/trade/orders"),
+      ),
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).endsWith("/perps/trade/orders"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not paper-fill when the spot book has asks but too little depth", async () => {
+    MOCK_ENV.ALLOW_PAPER_SPOT = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/spot/markets/symbols")) {
+        return jsonResponse({ code: 0, data: SPOT_SYMBOLS });
+      }
+      if (url.includes("/spot/markets/vMAG7ssi_vUSDC/orderbook")) {
+        return jsonResponse({
+          code: 0,
+          data: { asks: [["0.45", "1"]] },
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await placeOrders(
+      [
+        { symbol: "btc", side: "SHORT", sizeUsd: 10 },
+        { symbol: "ssimag7", side: "LONG", sizeUsd: 10 },
+      ],
+      false,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(
+      "sodex_insufficient_spot_liquidity:vMAG7ssi_vUSDC:0.45",
     );
     expect(
       fetchMock.mock.calls.some(([input]) =>

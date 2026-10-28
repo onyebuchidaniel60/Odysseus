@@ -24,6 +24,7 @@ describe("environment schema", () => {
     expect(env.MAX_POSITION_PCT).toBe(0.1);
     expect(env.MAX_PERP_LEVERAGE).toBe(2);
     expect(env.MOCK_SODEX).toBe(false);
+    expect(env.ALLOW_PAPER_SPOT).toBe(false);
     expect(env.NEXT_PUBLIC_APP_URL).toBe("http://localhost:3000");
     expect(env.ODYSSEUS_INDEX_TICKER).toBe("ssimag7");
     expect(env.SODEX_ACCOUNT_ID).toBe("60504");
@@ -120,5 +121,17 @@ describe("environment schema", () => {
         SODEX_ACCOUNT_ID: "18446744073709551616",
       }).success,
     ).toBe(false);
+  });
+
+  it("only enables paper spot when explicitly set to true", () => {
+    expect(
+      envSchema.parse({ ...requiredEnv, ALLOW_PAPER_SPOT: "true" })
+        .ALLOW_PAPER_SPOT,
+    ).toBe(true);
+    expect(
+      envSchema.parse({ ...requiredEnv, ALLOW_PAPER_SPOT: "false" })
+        .ALLOW_PAPER_SPOT,
+    ).toBe(false);
+    expect(envSchema.parse(requiredEnv).ALLOW_PAPER_SPOT).toBe(false);
   });
 });

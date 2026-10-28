@@ -755,6 +755,18 @@ export function RunDetailView({
                     {execution.venue}
                   </span>
                 </div>
+                {execution.executionMode ? (
+                  <div className="flex items-center justify-between border-b border-mockup-line px-4 py-2.5">
+                    <span className="font-mockup-mono text-[8px] uppercase tracking-[0.14em] text-mockup-dim">
+                      Mode
+                    </span>
+                    <span className="font-mockup-mono text-[9px] text-mockup-text">
+                      {execution.executionMode === "PAPER_SPOT"
+                        ? "PAPER SPOT"
+                        : execution.executionMode}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="divide-y divide-mockup-line/70">
                   {execution.legs.map((leg, index) => (
                     <div
@@ -768,6 +780,9 @@ export function RunDetailView({
                           >
                             {leg.side}
                           </Badge>
+                          {leg.mode === "paper" ? (
+                            <Badge tone="muted">PAPER</Badge>
+                          ) : null}
                           <span className="font-mockup text-[11px] font-medium uppercase text-mockup-text">
                             {leg.symbol}
                           </span>

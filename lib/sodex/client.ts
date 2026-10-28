@@ -11,6 +11,9 @@ export interface OrderLeg {
   sizeUsd: number;
 }
 
+export type ExecutionMode = "LIVE" | "PAPER_SPOT" | "MOCK";
+export type ExecutionLegMode = "live" | "paper" | "mock";
+
 export interface ExecutionResult {
   success: boolean;
   orderId?: string;
@@ -18,7 +21,9 @@ export interface ExecutionResult {
     symbol: string;
     orderId: string;
     status: string;
+    mode?: ExecutionLegMode;
   }>;
+  executionMode?: ExecutionMode;
   error?: string;
 }
 
@@ -261,7 +266,16 @@ export async function getSymbolId(
   return symbol.id;
 }
 
-function parseAskNotional(payload: unknown): number {
+interface SpotLiquidity {
+  symbolName: string;
+  askCount: number;
+  notional: number;
+}
+
+function parseAskLiquidity(payload: unknown): {
+  askCount: number;
+  notional: number;
+} {
   if (!payload || typeof payload !== "object") {
     throw new Error("sodex_orderbook_unexpected_response");
   }
@@ -286,6 +300,7 @@ function parseAskNotional(payload: unknown): number {
   }
 
   let notional = 0;
+  let askCount = 0;
 
   for (const ask of asks) {
     if (!Array.isArray(ask) || ask.length < 2) {
@@ -301,18 +316,19 @@ function parseAskNotional(payload: unknown): number {
       price > 0 &&
       quantity > 0
     ) {
+      askCount += 1;
       notional += price * quantity;
     }
   }
 
-  return notional;
+  return { askCount, notional };
 }
 
-async function assertSpotLiquidity(
+async function inspectSpotLiquidity(
   leg: OrderLeg,
   baseUrl: string,
   cache: ExecutionCache,
-): Promise<void> {
+): Promise<SpotLiquidity> {
   const symbol = await resolveMarketSymbol(
     leg.symbol,
     "spot",
@@ -324,13 +340,9 @@ async function assertSpotLiquidity(
       symbol.name,
     )}/orderbook?limit=20`,
   );
-  const notional = parseAskNotional(payload);
+  const { askCount, notional } = parseAskLiquidity(payload);
 
-  if (notional < leg.sizeUsd) {
-    throw new Error(
-      `sodex_insufficient_spot_liquidity:${symbol.name}:${notional.toFixed(2)}`,
-    );
-  }
+  return { symbolName: symbol.name, askCount, notional };
 }
 
 function parsePerpsTickers(payload: unknown): Map<string, number> {
@@ -765,10 +777,12 @@ async function placeMockOrders(legs: OrderLeg[]): Promise<ExecutionResult> {
 
   return {
     success: true,
+    executionMode: "MOCK",
     legs: legs.map((leg) => ({
       symbol: leg.symbol,
       orderId: randomUUID(),
       status: "filled",
+      mode: "mock",
     })),
   };
 }
@@ -827,13 +841,35 @@ export async function placeOrders(
     env.SODEX_API_KEY_PRIVATE_KEY as `0x${string}`,
   ).address;
 
-  for (const leg of legs) {
+  const paperLegIndexes = new Set<number>();
+
+  for (const [index, leg] of legs.entries()) {
     if (leg.side !== "LONG") {
       continue;
     }
 
     try {
-      await assertSpotLiquidity(leg, env.SODEX_BASE_URL, cache);
+      const liquidity = await inspectSpotLiquidity(
+        leg,
+        env.SODEX_BASE_URL,
+        cache,
+      );
+
+      if (liquidity.notional >= leg.sizeUsd) {
+        continue;
+      }
+
+      if (liquidity.askCount === 0 && env.ALLOW_PAPER_SPOT) {
+        console.warn(
+          `[sodex] Spot leg has no liquidity. Simulating paper fill. symbol=${liquidity.symbolName} sizeUsd=${leg.sizeUsd}`,
+        );
+        paperLegIndexes.add(index);
+        continue;
+      }
+
+      throw new Error(
+        `sodex_insufficient_spot_liquidity:${liquidity.symbolName}:${liquidity.notional.toFixed(2)}`,
+      );
     } catch (error) {
       return {
         success: false,
@@ -847,11 +883,15 @@ export async function placeOrders(
     }
   }
 
+  const executionMode: ExecutionMode =
+    paperLegIndexes.size > 0 ? "PAPER_SPOT" : "LIVE";
+
   for (const [index, leg] of legs.entries()) {
     if (!Number.isFinite(leg.sizeUsd) || leg.sizeUsd <= 0) {
       return {
         success: false,
         error: "OrderLeg.sizeUsd must be a positive finite number",
+        executionMode,
         legs: [
           ...results,
           {
@@ -861,6 +901,16 @@ export async function placeOrders(
           },
         ],
       };
+    }
+
+    if (paperLegIndexes.has(index)) {
+      results.push({
+        symbol: leg.symbol,
+        orderId: `paper_spot_${randomUUID()}`,
+        status: "filled",
+        mode: "paper",
+      });
+      continue;
     }
 
     const clientOrderId = `${batchClientOrderId
@@ -890,6 +940,7 @@ export async function placeOrders(
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
+        executionMode,
         legs: [
           ...results,
           {
@@ -923,6 +974,7 @@ export async function placeOrders(
         error: `sodex_signing_failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        executionMode,
         legs: [
           ...results,
           {
@@ -947,6 +999,7 @@ export async function placeOrders(
       return {
         success: false,
         error: response.error,
+        executionMode,
         legs: [
           ...results,
           {
@@ -974,12 +1027,14 @@ export async function placeOrders(
       symbol: leg.symbol,
       orderId,
       status,
+      mode: "live",
     });
 
     if (status === "canceled" || status === "expired" || status === "rejected") {
       return {
         success: false,
         error: `sodex_order_not_filled:${leg.symbol}:${status}`,
+        executionMode,
         legs: results,
       };
     }
@@ -989,5 +1044,6 @@ export async function placeOrders(
     success: true,
     orderId: batchClientOrderId,
     legs: results,
+    executionMode,
   };
 }

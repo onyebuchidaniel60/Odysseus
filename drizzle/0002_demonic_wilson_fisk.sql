@@ -1,0 +1,1 @@
+ALTER TABLE "execution" ADD COLUMN "execution_mode" text;

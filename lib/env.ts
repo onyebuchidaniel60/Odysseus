@@ -90,6 +90,8 @@ export const envSchema = z.object({
 
   MOCK_SODEX: booleanFromEnv,
 
+  ALLOW_PAPER_SPOT: booleanFromEnv,
+
   NEXT_PUBLIC_APP_URL: z.preprocess(
     emptyToUndefined,
     z.string().url().default("http://localhost:3000"),

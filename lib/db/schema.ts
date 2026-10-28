@@ -79,6 +79,7 @@ export const execution = pgTable("execution", {
   legs: jsonb("legs").notNull(),
   clientOrderId: text("client_order_id").notNull().unique(),
   status: text("status").notNull(),
+  executionMode: text("execution_mode"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 

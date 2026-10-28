@@ -372,7 +372,7 @@ export function DashboardView({
     execution?.legs.map((leg) => ({
       label: `${leg.side} ${leg.symbol.toUpperCase()}${
         leg.side === "SHORT" ? "-PERP" : ""
-      }`,
+      }${leg.mode === "paper" ? " (PAPER)" : ""}`,
       value: formatUsd(leg.sizeUsd),
       pct:
         maxLegSize > 0
