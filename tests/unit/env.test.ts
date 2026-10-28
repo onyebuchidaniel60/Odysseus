@@ -7,9 +7,9 @@ const requiredEnv = {
   DATABASE_URL: "postgres://postgres:postgres@localhost:5432/odysseus",
   SOSO_API_KEY: "soso_test_key",
   SODEX_BASE_URL: "https://testnet-gw.sodex.dev",
-  SODEX_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+  SODEX_API_KEY_PRIVATE_KEY: `0x${"1".repeat(64)}`,
   SODEX_API_KEY_NAME: "odysseus-testnet",
-  SODEX_ACCOUNT_ID: "00000000-0000-4000-8000-000000000000",
+  SODEX_ACCOUNT_ID: "60504",
   OPENAI_API_KEY: "sk-test",
   OPERATOR_SECRET: "a".repeat(64),
 };
@@ -26,6 +26,7 @@ describe("environment schema", () => {
     expect(env.MOCK_SODEX).toBe(false);
     expect(env.NEXT_PUBLIC_APP_URL).toBe("http://localhost:3000");
     expect(env.ODYSSEUS_INDEX_TICKER).toBe("ssimag7");
+    expect(env.SODEX_ACCOUNT_ID).toBe("60504");
   });
 
   it("defaults NODE_ENV to development when unset", () => {
@@ -73,7 +74,7 @@ describe("environment schema", () => {
           "DATABASE_URL",
           "SOSO_API_KEY",
           "SODEX_BASE_URL",
-          "SODEX_PRIVATE_KEY",
+          "SODEX_API_KEY_PRIVATE_KEY",
           "SODEX_API_KEY_NAME",
           "SODEX_ACCOUNT_ID",
           "OPENAI_API_KEY",
@@ -83,12 +84,41 @@ describe("environment schema", () => {
     }
   });
 
-  it("rejects malformed private keys", () => {
+  it("rejects malformed API key private keys", () => {
     const result = envSchema.safeParse({
       ...requiredEnv,
-      SODEX_PRIVATE_KEY: "not-a-private-key",
+      SODEX_API_KEY_PRIVATE_KEY: "not-a-private-key",
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("rejects UUID account IDs and accepts uint64 strings", () => {
+    expect(
+      envSchema.safeParse({
+        ...requiredEnv,
+        SODEX_ACCOUNT_ID: "00000000-0000-4000-8000-000000000000",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      envSchema.safeParse({
+        ...requiredEnv,
+        SODEX_ACCOUNT_ID: "18446744073709551615",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects zero and out-of-range account IDs", () => {
+    expect(
+      envSchema.safeParse({ ...requiredEnv, SODEX_ACCOUNT_ID: "0" }).success,
+    ).toBe(false);
+
+    expect(
+      envSchema.safeParse({
+        ...requiredEnv,
+        SODEX_ACCOUNT_ID: "18446744073709551616",
+      }).success,
+    ).toBe(false);
   });
 });

@@ -646,16 +646,19 @@ export async function processSnapshot(
         result.legs[index]?.status ?? (result.success ? "submitted" : "failed"),
     }));
 
+    const executionStatus = result.success
+      ? options.mockSodex ||
+        executionLegs.every((leg) => leg.status === "filled")
+        ? "filled"
+        : "submitted"
+      : "failed";
+
     await store.insertExecution({
       riskCheckId: riskRow.id,
       venue: "sodex-testnet",
       legs: executionLegs,
       clientOrderId,
-      status: result.success
-        ? options.mockSodex
-          ? "filled"
-          : "submitted"
-        : "failed",
+      status: executionStatus,
     });
 
     if (!result.success) {

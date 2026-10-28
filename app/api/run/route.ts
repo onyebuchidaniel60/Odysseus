@@ -11,9 +11,12 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   let operatorSecret: string;
+  let mockSodex: boolean;
 
   try {
-    operatorSecret = getEnv().OPERATOR_SECRET;
+    const env = getEnv();
+    operatorSecret = env.OPERATOR_SECRET;
+    mockSodex = env.MOCK_SODEX;
   } catch {
     return NextResponse.json(
       { error: "Server configuration error" },
@@ -28,9 +31,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await runPipeline({
-      mockSodex: process.env.MOCK_SODEX === "true",
-    });
+    const result = await runPipeline({ mockSodex });
 
     return NextResponse.json(result, { status: result.success ? 200 : 500 });
   } catch (error) {

@@ -33,11 +33,13 @@ export const envSchema = z.object({
     .min(1, "SODEX_BASE_URL is required")
     .url("SODEX_BASE_URL must be a valid URL"),
 
-  SODEX_PRIVATE_KEY: z
-    .string({ required_error: "SODEX_PRIVATE_KEY is required" })
+  SODEX_API_KEY_PRIVATE_KEY: z
+    .string({
+      required_error: "SODEX_API_KEY_PRIVATE_KEY is required",
+    })
     .regex(
       /^0x[0-9a-fA-F]{64}$/,
-      "SODEX_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string",
+      "SODEX_API_KEY_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string",
     ),
 
   SODEX_API_KEY_NAME: z
@@ -46,7 +48,18 @@ export const envSchema = z.object({
 
   SODEX_ACCOUNT_ID: z
     .string({ required_error: "SODEX_ACCOUNT_ID is required" })
-    .uuid("SODEX_ACCOUNT_ID must be a UUID"),
+    .regex(/^\d+$/, "SODEX_ACCOUNT_ID must be a uint64 string")
+    .refine((value) => {
+      if (!/^\d+$/.test(value)) {
+        return false;
+      }
+
+      const parsed = BigInt(value);
+      return (
+        parsed > BigInt(0) &&
+        parsed <= BigInt("18446744073709551615")
+      );
+    }, "SODEX_ACCOUNT_ID must be between 1 and 2^64-1"),
 
   OPENAI_API_KEY: z
     .string({ required_error: "OPENAI_API_KEY is required" })

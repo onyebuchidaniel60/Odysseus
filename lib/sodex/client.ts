@@ -22,12 +22,28 @@ export interface ExecutionResult {
   error?: string;
 }
 
-type Market = "spot" | "perps";
+export type Market = "spot" | "perps";
 
 interface SignedOrder {
   market: Market;
   action: "batchNewOrder" | "newOrder";
   params: Record<string, unknown>;
+}
+
+interface MarketSymbol {
+  id: number;
+  name: string;
+  displayName?: string;
+  baseCoin?: string;
+  quantityPrecision: number;
+  stepSize: string;
+  minQuantity: string;
+  minNotional: string;
+}
+
+interface ExecutionCache {
+  symbols: Map<Market, Promise<MarketSymbol[]>>;
+  tickers?: Promise<Map<string, number>>;
 }
 
 interface LegResponse {
@@ -46,6 +62,9 @@ const TYPE_MARKET = 2;
 const TIME_IN_FORCE_IOC = 3;
 const ORDER_MODIFIER_NORMAL = 1;
 const POSITION_SIDE_BOTH = 1;
+const TICKER_ALIASES: Record<string, string> = {
+  ssimag7: "mag7ssi",
+};
 
 let lastNonce = 0;
 
@@ -82,14 +101,368 @@ function endpointFor(baseUrl: string, market: Market): string {
   return `${apiBaseUrl(baseUrl)}${suffix}`;
 }
 
-function parsePositiveInteger(value: string, field: string): number {
-  const parsed = Number(value);
-
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${field} must be a positive integer`);
+function parseAccountId(value: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new Error("SODEX_ACCOUNT_ID must be a uint64 string");
   }
 
-  return parsed;
+  const parsed = BigInt(value);
+
+  if (
+    parsed <= BigInt(0) ||
+    parsed > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new Error(
+      "SODEX_ACCOUNT_ID must fit in a safe integer for order JSON",
+    );
+  }
+
+  return Number(parsed);
+}
+
+function normalizeTicker(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return TICKER_ALIASES[normalized] ?? normalized.replace(/^v/, "");
+}
+
+function matchesTicker(symbol: MarketSymbol, ticker: string): boolean {
+  const target = normalizeTicker(ticker);
+  const candidates = [
+    symbol.baseCoin,
+    symbol.name.split(/[-_]/)[0],
+    symbol.displayName?.split("/")[0],
+  ];
+
+  return candidates.some(
+    (candidate) => candidate && normalizeTicker(candidate) === target,
+  );
+}
+
+function parseMarketSymbols(payload: unknown): MarketSymbol[] {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("sodex_markets_unexpected_response");
+  }
+
+  const record = payload as Record<string, unknown>;
+  const code = record.code;
+
+  if (typeof code === "number" && code !== 0) {
+    const message = extractErrorMessage(
+      record.error ?? record.message ?? record.msg ?? record.details,
+    );
+    throw new Error(
+      `sodex_markets_error_${code}${message ? `: ${message}` : ""}`,
+    );
+  }
+
+  if (!Array.isArray(record.data)) {
+    throw new Error("sodex_markets_invalid_data");
+  }
+
+  return record.data.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`sodex_markets_invalid_symbol_at_${index}`);
+    }
+
+    const symbol = entry as Record<string, unknown>;
+    const id = Number(symbol.id);
+    const name = symbol.name;
+
+    if (!Number.isInteger(id) || id <= 0 || typeof name !== "string") {
+      throw new Error(`sodex_markets_invalid_symbol_at_${index}`);
+    }
+
+    return {
+      id,
+      name,
+      displayName:
+        typeof symbol.displayName === "string"
+          ? symbol.displayName
+          : undefined,
+      baseCoin:
+        typeof symbol.baseCoin === "string" ? symbol.baseCoin : undefined,
+      quantityPrecision:
+        typeof symbol.quantityPrecision === "number"
+          ? symbol.quantityPrecision
+          : 0,
+      stepSize:
+        typeof symbol.stepSize === "string" ? symbol.stepSize : "1",
+      minQuantity:
+        typeof symbol.minQuantity === "string" ? symbol.minQuantity : "0",
+      minNotional:
+        typeof symbol.minNotional === "string" ? symbol.minNotional : "0",
+    };
+  });
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `sodex_markets_http_${response.status}: ${truncate(body)}`,
+    );
+  }
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error("sodex_markets_invalid_json");
+  }
+}
+
+async function loadMarketSymbols(
+  baseUrl: string,
+  market: Market,
+  cache: ExecutionCache,
+): Promise<MarketSymbol[]> {
+  const cached = cache.symbols.get(market);
+
+  if (cached) {
+    return cached;
+  }
+
+  const promise = fetchJson(
+    `${apiBaseUrl(baseUrl)}/${market}/markets/symbols`,
+  ).then(parseMarketSymbols);
+  cache.symbols.set(market, promise);
+
+  return promise;
+}
+
+async function resolveMarketSymbol(
+  ticker: string,
+  market: Market,
+  baseUrl: string,
+  cache: ExecutionCache,
+): Promise<MarketSymbol> {
+  const symbols = await loadMarketSymbols(baseUrl, market, cache);
+  const symbol = symbols.find((entry) => matchesTicker(entry, ticker));
+
+  if (!symbol) {
+    throw new Error(`sodex_symbol_not_found:${market}:${ticker}`);
+  }
+
+  return symbol;
+}
+
+export async function getSymbolId(
+  ticker: string,
+  market: Market,
+): Promise<number> {
+  const env = getEnv();
+  const symbol = await resolveMarketSymbol(ticker, market, env.SODEX_BASE_URL, {
+    symbols: new Map(),
+  });
+
+  return symbol.id;
+}
+
+function parseAskNotional(payload: unknown): number {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("sodex_orderbook_unexpected_response");
+  }
+
+  const record = payload as Record<string, unknown>;
+  const code = record.code;
+
+  if (typeof code === "number" && code !== 0) {
+    throw new Error(`sodex_orderbook_error_${code}`);
+  }
+
+  const data = record.data;
+
+  if (!data || typeof data !== "object") {
+    throw new Error("sodex_orderbook_invalid_data");
+  }
+
+  const asks = (data as Record<string, unknown>).asks;
+
+  if (!Array.isArray(asks)) {
+    throw new Error("sodex_orderbook_invalid_asks");
+  }
+
+  let notional = 0;
+
+  for (const ask of asks) {
+    if (!Array.isArray(ask) || ask.length < 2) {
+      continue;
+    }
+
+    const price = Number(ask[0]);
+    const quantity = Number(ask[1]);
+
+    if (
+      Number.isFinite(price) &&
+      Number.isFinite(quantity) &&
+      price > 0 &&
+      quantity > 0
+    ) {
+      notional += price * quantity;
+    }
+  }
+
+  return notional;
+}
+
+async function assertSpotLiquidity(
+  leg: OrderLeg,
+  baseUrl: string,
+  cache: ExecutionCache,
+): Promise<void> {
+  const symbol = await resolveMarketSymbol(
+    leg.symbol,
+    "spot",
+    baseUrl,
+    cache,
+  );
+  const payload = await fetchJson(
+    `${apiBaseUrl(baseUrl)}/spot/markets/${encodeURIComponent(
+      symbol.name,
+    )}/orderbook?limit=20`,
+  );
+  const notional = parseAskNotional(payload);
+
+  if (notional < leg.sizeUsd) {
+    throw new Error(
+      `sodex_insufficient_spot_liquidity:${symbol.name}:${notional.toFixed(2)}`,
+    );
+  }
+}
+
+function parsePerpsTickers(payload: unknown): Map<string, number> {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("sodex_tickers_unexpected_response");
+  }
+
+  const record = payload as Record<string, unknown>;
+  const code = record.code;
+
+  if (typeof code === "number" && code !== 0) {
+    throw new Error(`sodex_tickers_error_${code}`);
+  }
+
+  if (!Array.isArray(record.data)) {
+    throw new Error("sodex_tickers_invalid_data");
+  }
+
+  const prices = new Map<string, number>();
+
+  for (const entry of record.data) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const ticker = entry as Record<string, unknown>;
+    const symbol = ticker.symbol;
+    const markPrice = Number(ticker.markPrice);
+
+    if (
+      typeof symbol === "string" &&
+      Number.isFinite(markPrice) &&
+      markPrice > 0
+    ) {
+      prices.set(symbol, markPrice);
+    }
+  }
+
+  return prices;
+}
+
+async function resolveMarkPrice(
+  symbolName: string,
+  baseUrl: string,
+  cache: ExecutionCache,
+): Promise<number> {
+  if (!cache.tickers) {
+    cache.tickers = fetchJson(
+      `${apiBaseUrl(baseUrl)}/perps/markets/mark-prices`,
+    ).then(parsePerpsTickers);
+  }
+
+  const prices = await cache.tickers;
+  const markPrice = prices.get(symbolName);
+
+  if (!markPrice) {
+    throw new Error(`sodex_mark_price_not_found:${symbolName}`);
+  }
+
+  return markPrice;
+}
+
+function roundToStep(
+  value: number,
+  stepSize: string,
+  precision: number,
+): number {
+  const step = Number(stepSize);
+
+  if (!Number.isFinite(step) || step <= 0) {
+    return Number(value.toFixed(precision));
+  }
+
+  return Number((Math.round(value / step) * step).toFixed(precision));
+}
+
+function formatDecimal(value: number, precision: number): string {
+  const fixed = value.toFixed(precision);
+
+  return fixed.includes(".")
+    ? fixed.replace(/0+$/, "").replace(/\.$/, "")
+    : fixed;
+}
+
+function buildPerpsQuantity(
+  sizeUsd: number,
+  markPrice: number,
+  symbol: MarketSymbol,
+): string {
+  const precision = Number.isInteger(symbol.quantityPrecision)
+    ? symbol.quantityPrecision
+    : 0;
+  const step = Number(symbol.stepSize);
+  const minQuantity = Number(symbol.minQuantity);
+  const minNotional = Number(symbol.minNotional);
+  let quantity = roundToStep(
+    sizeUsd / markPrice,
+    symbol.stepSize,
+    precision,
+  );
+
+  if (Number.isFinite(minQuantity) && quantity < minQuantity) {
+    quantity = minQuantity;
+  }
+
+  let guard = 0;
+
+  while (
+    Number.isFinite(minNotional) &&
+    minNotional > 0 &&
+    quantity * markPrice < minNotional &&
+    guard < 1_000
+  ) {
+    quantity = roundToStep(
+      quantity + (Number.isFinite(step) && step > 0 ? step : 10 ** -precision),
+      symbol.stepSize,
+      precision,
+    );
+    guard += 1;
+  }
+
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0 ||
+    (Number.isFinite(minNotional) &&
+      minNotional > 0 &&
+      quantity * markPrice < minNotional)
+  ) {
+    throw new Error(`sodex_min_notional_not_met:${symbol.name}`);
+  }
+
+  return formatDecimal(quantity, precision);
 }
 
 function buildSignedOrder(
@@ -97,6 +470,7 @@ function buildSignedOrder(
   accountId: number,
   symbolId: number,
   clientOrderId: string,
+  quantity?: string,
 ): SignedOrder {
   const side = sideCode(leg);
 
@@ -120,6 +494,10 @@ function buildSignedOrder(
     };
   }
 
+  if (!quantity) {
+    throw new Error("perps_quantity_required");
+  }
+
   return {
     market: "perps",
     action: "newOrder",
@@ -133,7 +511,7 @@ function buildSignedOrder(
           side,
           type: TYPE_MARKET,
           timeInForce: TIME_IN_FORCE_IOC,
-          funds: leg.sizeUsd.toString(),
+          quantity,
           reduceOnly: false,
           positionSide: POSITION_SIDE_BOTH,
         },
@@ -177,7 +555,13 @@ async function signOrder(
     },
   });
 
-  return concatHex(["0x01", signature]);
+  const recovery = Number.parseInt(signature.slice(-2), 16);
+  const wireSignature = (signature.slice(0, -2) +
+    (recovery >= 27 ? recovery - 27 : recovery)
+      .toString(16)
+      .padStart(2, "0")) as `0x${string}`;
+
+  return concatHex(["0x01", wireSignature]);
 }
 
 function extractErrorMessage(value: unknown): string {
@@ -334,6 +718,48 @@ async function postSignedOrder(
   }
 }
 
+async function reconcileOrderStatus(
+  orderId: string,
+  market: Market,
+  symbolName: string,
+  accountId: number,
+  userAddress: string,
+  baseUrl: string,
+): Promise<string> {
+  const engine = market === "spot" ? "spot" : "perps";
+  const url = `${apiBaseUrl(baseUrl)}/${engine}/accounts/${userAddress}/orders/history?accountID=${accountId}&symbol=${encodeURIComponent(
+    symbolName,
+  )}&limit=50`;
+
+  try {
+    const payload = await fetchJson(url);
+    const record = payload as { data?: unknown };
+    const orders = Array.isArray(record.data) ? record.data : [];
+    const match = orders.find((order) => {
+      if (!order || typeof order !== "object") {
+        return false;
+      }
+
+      return String((order as Record<string, unknown>).orderID) === orderId;
+    });
+
+    if (!match || typeof match !== "object") {
+      return "submitted";
+    }
+
+    const status = (match as Record<string, unknown>).status;
+
+    if (typeof status !== "string") {
+      return "submitted";
+    }
+
+    const normalized = status.toLowerCase();
+    return normalized === "new" ? "submitted" : normalized;
+  } catch {
+    return "submitted";
+  }
+}
+
 async function placeMockOrders(legs: OrderLeg[]): Promise<ExecutionResult> {
   await sleep(MOCK_DELAY_MS);
 
@@ -365,6 +791,7 @@ export async function placeOrders(
 
   const batchClientOrderId = randomUUID();
   const results: ExecutionResult["legs"] = [];
+  const cache: ExecutionCache = { symbols: new Map() };
   let env: ReturnType<typeof getEnv>;
   let accountId: number;
 
@@ -383,7 +810,7 @@ export async function placeOrders(
   }
 
   try {
-    accountId = parsePositiveInteger(env.SODEX_ACCOUNT_ID, "SODEX_ACCOUNT_ID");
+    accountId = parseAccountId(env.SODEX_ACCOUNT_ID);
   } catch (error) {
     return {
       success: false,
@@ -396,9 +823,31 @@ export async function placeOrders(
     };
   }
 
-  for (const [index, leg] of legs.entries()) {
-    let symbolId: number;
+  const userAddress = privateKeyToAccount(
+    env.SODEX_API_KEY_PRIVATE_KEY as `0x${string}`,
+  ).address;
 
+  for (const leg of legs) {
+    if (leg.side !== "LONG") {
+      continue;
+    }
+
+    try {
+      await assertSpotLiquidity(leg, env.SODEX_BASE_URL, cache);
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        legs: legs.map((entry) => ({
+          symbol: entry.symbol,
+          orderId: batchClientOrderId,
+          status: "rejected",
+        })),
+      };
+    }
+  }
+
+  for (const [index, leg] of legs.entries()) {
     if (!Number.isFinite(leg.sizeUsd) || leg.sizeUsd <= 0) {
       return {
         success: false,
@@ -414,8 +863,29 @@ export async function placeOrders(
       };
     }
 
+    const clientOrderId = `${batchClientOrderId
+      .replace(/-/g, "")
+      .slice(0, 28)}${String(index).padStart(2, "0")}`;
+    const market: Market = leg.side === "LONG" ? "spot" : "perps";
+    let symbol: MarketSymbol;
+    let quantity: string | undefined;
+
     try {
-      symbolId = parsePositiveInteger(leg.symbol, "OrderLeg.symbol");
+      symbol = await resolveMarketSymbol(
+        leg.symbol,
+        market,
+        env.SODEX_BASE_URL,
+        cache,
+      );
+
+      if (market === "perps") {
+        const markPrice = await resolveMarkPrice(
+          symbol.name,
+          env.SODEX_BASE_URL,
+          cache,
+        );
+        quantity = buildPerpsQuantity(leg.sizeUsd, markPrice, symbol);
+      }
     } catch (error) {
       return {
         success: false,
@@ -424,22 +894,29 @@ export async function placeOrders(
           ...results,
           {
             symbol: leg.symbol,
-            orderId: batchClientOrderId,
+            orderId: clientOrderId,
             status: "rejected",
           },
         ],
       };
     }
 
-    const clientOrderId = `${batchClientOrderId
-      .replace(/-/g, "")
-      .slice(0, 28)}${String(index).padStart(2, "0")}`;
-    const order = buildSignedOrder(leg, accountId, symbolId, clientOrderId);
+    const order = buildSignedOrder(
+      leg,
+      accountId,
+      symbol.id,
+      clientOrderId,
+      quantity,
+    );
     const nonce = nextNonce();
     let signature: string;
 
     try {
-      signature = await signOrder(order, env.SODEX_PRIVATE_KEY, nonce);
+      signature = await signOrder(
+        order,
+        env.SODEX_API_KEY_PRIVATE_KEY,
+        nonce,
+      );
     } catch (error) {
       return {
         success: false,
@@ -481,11 +958,31 @@ export async function placeOrders(
       };
     }
 
+    const orderId = response.orderId ?? clientOrderId;
+    const status = response.orderId
+      ? await reconcileOrderStatus(
+          orderId,
+          market,
+          symbol.name,
+          accountId,
+          userAddress,
+          env.SODEX_BASE_URL,
+        )
+      : "submitted";
+
     results.push({
       symbol: leg.symbol,
-      orderId: response.orderId ?? clientOrderId,
-      status: "submitted",
+      orderId,
+      status,
     });
+
+    if (status === "canceled" || status === "expired" || status === "rejected") {
+      return {
+        success: false,
+        error: `sodex_order_not_filled:${leg.symbol}:${status}`,
+        legs: results,
+      };
+    }
   }
 
   return {
