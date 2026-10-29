@@ -19,7 +19,7 @@
 ## Demo video
 
 - Command: `npm run demo:video`
-- Output: `odysseus-demo.mp4` — 121.6s, 1920×1080 H.264/AAC, 13 MB
+- Output: `odysseus-demo.mp4` — 122.6s, 1920×1080 H.264/AAC, 13 MB
 - Generator: `edge-tts` narration → Playwright recording → FFmpeg composition.
   Full instructions and caveats in `scripts/demo-video/README.md`.
 - Console scenes use the persisted local execution run

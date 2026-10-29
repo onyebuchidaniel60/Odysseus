@@ -2,26 +2,25 @@
   "voice": "en-US-AndrewNeural",
   "rate": "-2%",
   "pitch": "-1Hz",
-  "narrator": "Daniel",
-  "generatedAt": "2026-10-29T04:41:53.947Z",
+  "generatedAt": "2026-10-29T21:23:47.960Z",
   "scenes": [
     {
       "id": "01-landing",
-      "text": "Hi, I'm Daniel, and this is Odysseus. It is an autonomous SSI index-deviation agent built for the One-Person On-Chain Finance Business track. It acts as a self-contained fund manager that identifies mispriced deviations in SoSoValue indexes and executes trades on SoDEX. The key is that it is built to say no trade by default.",
+      "text": "This is Odysseus. It is an autonomous SSI index-deviation agent built for on-chain fund operators. It acts as a self-contained fund manager that identifies mispriced deviations in SoSoValue indexes and executes relative-value trades on SoDEX. It is built for teams that value discipline, not prediction. The key is that it is built to say no trade by default.",
       "file": "narration/01-landing.mp3",
-      "narrationDuration": 23.184,
+      "narrationDuration": 24.336,
       "leadSilence": 0.6,
       "tailSilence": 0.8,
-      "sceneDuration": 24.584
+      "sceneDuration": 25.736
     },
     {
       "id": "02-dashboard",
-      "text": "Let's go to the console. I'll connect my operator wallet and click Run Pipeline. The agent immediately fetches data from the SoSoValue API, validates the klines, and calculates the z-scores for the MAG7 constituents. Every run stores the validated snapshot, the deviation signals, and the audit trail, so judges can inspect the decision.",
+      "text": "Let's go to the console. I'll connect my operator wallet and click Run Pipeline. The agent immediately fetches data from the SoSoValue API, validates the klines, and calculates the z-scores for the MAG7 constituents. Every run stores the validated snapshot, the deviation signals, and the audit trail, so operators can inspect the decision.",
       "file": "narration/02-dashboard.mp3",
-      "narrationDuration": 22.512,
+      "narrationDuration": 22.488,
       "leadSilence": 0.6,
       "tailSilence": 0.8,
-      "sceneDuration": 23.912
+      "sceneDuration": 23.888
     },
     {
       "id": "03-debate",
@@ -43,12 +42,12 @@
     },
     {
       "id": "05-replay",
-      "text": "Every run is saved. Judges can go to the Replay page to re-run historical snapshots instantly. Odysseus proves that a single person can run a risk-managed, on-chain fund with zero manual intervention. The live console and the complete source code are linked on screen. Every number in this demo comes from a persisted run. Thank you.",
+      "text": "Every run is saved. Operators can go to the Replay page to re-run historical snapshots instantly. Odysseus proves that a single person can run a risk-managed, on-chain fund with zero manual intervention. The live console and the complete source code are linked on screen. Every number shown here comes from a persisted run. Thank you.",
       "file": "narration/05-replay.mp3",
-      "narrationDuration": 21.12,
+      "narrationDuration": 21.024,
       "leadSilence": 0.6,
       "tailSilence": 0.8,
-      "sceneDuration": 22.52
+      "sceneDuration": 22.424
     }
   ]
 }

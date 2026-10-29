@@ -637,7 +637,7 @@ export async function showEndCard(page) {
       const card = document.createElement("div");
       card.id = "odysseus-endcard";
       card.innerHTML = `
-        <div class="end-kicker">SoSoValue Buildathon · One-Person On-Chain Finance</div>
+        <div class="end-kicker">SoSoValue Index Infrastructure · One-Person On-Chain Finance</div>
         <div class="end-title">ODYSSEUS</div>
         <div class="end-sub">Autonomous SSI index-deviation agent</div>
         <div class="end-rule"></div>

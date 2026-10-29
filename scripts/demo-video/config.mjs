@@ -29,7 +29,6 @@ export const DEMO_REPLAY_RUN_ID = "a2520e22-28a0-4e05-84b9-35e9274f2e4e";
 export const VOICE = process.env.DEMO_VOICE ?? "en-US-AndrewNeural";
 export const VOICE_RATE = process.env.DEMO_VOICE_RATE ?? "-2%";
 export const VOICE_PITCH = process.env.DEMO_VOICE_PITCH ?? "-1Hz";
-export const NARRATOR_NAME = process.env.DEMO_NARRATOR_NAME ?? "Daniel";
 
 /** Audio-first pacing: each scene lasts lead + narration + tail. */
 export const LEAD_SILENCE = 0.6;
@@ -45,9 +44,10 @@ export const SCENES = [
     kicker: "01 / OVERVIEW",
     title: "Autonomous SSI index-deviation agent",
     narration: [
-      `Hi, I'm ${NARRATOR_NAME}, and this is Odysseus.`,
-      "It is an autonomous SSI index-deviation agent built for the One-Person On-Chain Finance Business track.",
-      "It acts as a self-contained fund manager that identifies mispriced deviations in SoSoValue indexes and executes trades on SoDEX.",
+      "This is Odysseus.",
+      "It is an autonomous SSI index-deviation agent built for on-chain fund operators.",
+      "It acts as a self-contained fund manager that identifies mispriced deviations in SoSoValue indexes and executes relative-value trades on SoDEX.",
+      "It is built for teams that value discipline, not prediction.",
       "The key is that it is built to say no trade by default.",
     ].join(" "),
   },
@@ -60,7 +60,7 @@ export const SCENES = [
       "Let's go to the console.",
       "I'll connect my operator wallet and click Run Pipeline.",
       "The agent immediately fetches data from the SoSoValue API, validates the klines, and calculates the z-scores for the MAG7 constituents.",
-      "Every run stores the validated snapshot, the deviation signals, and the audit trail, so judges can inspect the decision.",
+      "Every run stores the validated snapshot, the deviation signals, and the audit trail, so operators can inspect the decision.",
     ].join(" "),
   },
   {
@@ -96,10 +96,10 @@ export const SCENES = [
     title: "Every run is saved. Every snapshot can be re-run.",
     narration: [
       "Every run is saved.",
-      "Judges can go to the Replay page to re-run historical snapshots instantly.",
+      "Operators can go to the Replay page to re-run historical snapshots instantly.",
       "Odysseus proves that a single person can run a risk-managed, on-chain fund with zero manual intervention.",
       "The live console and the complete source code are linked on screen.",
-      "Every number in this demo comes from a persisted run.",
+      "Every number shown here comes from a persisted run.",
       "Thank you.",
     ].join(" "),
   },

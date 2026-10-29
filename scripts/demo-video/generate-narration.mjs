@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   LEAD_SILENCE,
   NARRATION_DIR,
-  NARRATOR_NAME,
   SCENES,
   TAIL_SILENCE,
   VOICE,
@@ -55,7 +54,6 @@ function main() {
     voice: VOICE,
     rate: VOICE_RATE,
     pitch: VOICE_PITCH,
-    narrator: NARRATOR_NAME,
     generatedAt: new Date().toISOString(),
     scenes: [],
   };
