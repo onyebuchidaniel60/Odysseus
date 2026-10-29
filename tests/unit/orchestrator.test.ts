@@ -537,6 +537,45 @@ describe("runPipeline", () => {
     expect(vi.mocked(placeOrders)).not.toHaveBeenCalled();
   });
 
+  it("applies the forceDemoTrade bypass to the risk engine", async () => {
+    vi.mocked(runChiefAgent).mockResolvedValue({
+      decision: "SHORT",
+      confidence: 0.1,
+      thesis: "Demo override.",
+      invalidators: [],
+      key_evidence: ["z-score 5.57"],
+    });
+    const store = new FakeStore();
+    const result = await runPipeline({
+      ...runOptions(store),
+      forceDemoTrade: true,
+      riskContext: {
+        portfolioBalanceUsd: 100_000,
+        spreadPct: 0.001,
+        depthUsd: 100,
+        dataConfidence: 0.9,
+      },
+    });
+
+    expect(result).toMatchObject({ success: true, decision: "SHORT" });
+    expect(store.riskChecks[0]?.input.approved).toBe(true);
+    expect(store.riskChecks[0]?.input.approvedSize).toBe(10);
+    expect(store.riskChecks[0]?.input.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "depth",
+          passed: true,
+          reason: "bypassed_by_force_demo_trade",
+        }),
+        expect.objectContaining({
+          name: "ai_confidence",
+          passed: true,
+          reason: "bypassed_by_force_demo_trade",
+        }),
+      ]),
+    );
+  });
+
   it("records a paper spot fill while the real perps leg stays filled", async () => {
     vi.mocked(placeOrders).mockResolvedValue({
       success: true,

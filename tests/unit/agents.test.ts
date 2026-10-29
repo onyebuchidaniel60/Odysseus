@@ -128,8 +128,25 @@ describe("Bull agent", () => {
     expect(request.max_tokens).toBe(1000);
     expect(request.response_format).toEqual({ type: "json_object" });
     expect(request.messages[0].content).toContain("You are the Bull Agent");
+    expect(request.messages[0].content).toContain("between 0.50 and 0.95");
+    expect(request.messages[0].content).toContain("never return 0.0");
     expect(request.messages[1].content).toContain('"symbol": "btc"');
     expect(request.messages[1].content).toContain('"z_score": 2.34');
+  });
+
+  it("retries when the Bull proposes a trade with zero confidence", async () => {
+    createCompletion
+      .mockResolvedValueOnce(
+        jsonCompletion({ ...bullOutput, confidence: 0 }),
+      )
+      .mockResolvedValueOnce(jsonCompletion(bullOutput));
+
+    await expect(runBullAgent({ signal })).resolves.toEqual(bullOutput);
+
+    expect(createCompletion).toHaveBeenCalledTimes(2);
+    expect(createCompletion.mock.calls[1][0].messages[1].content).toContain(
+      "greater than 0",
+    );
   });
 
   it("falls back to an empty argument when JSON is invalid", async () => {
@@ -198,6 +215,12 @@ describe("Chief agent", () => {
     const request = firstRequest();
     expect(request.model).toBe("openai/gpt-4o-mini");
     expect(request.messages[0].content).toContain("You are the Chief");
+    expect(request.messages[0].content).toContain(
+      "deterministic risk engine's responsibility",
+    );
+    expect(request.messages[0].content).toContain(
+      "not by itself an objection",
+    );
     expect(request.messages[1].content).toContain("Bull output:");
     expect(request.messages[1].content).toContain("Bear output:");
     expect(request.messages[1].content).toContain(bullOutput.argument);

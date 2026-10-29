@@ -12,11 +12,13 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   let operatorSecret: string;
   let mockSodex: boolean;
+  let forceDemoTrade: boolean;
 
   try {
     const env = getEnv();
     operatorSecret = env.OPERATOR_SECRET;
     mockSodex = env.MOCK_SODEX;
+    forceDemoTrade = env.FORCE_DEMO_TRADE;
   } catch {
     return NextResponse.json(
       { error: "Server configuration error" },
@@ -31,7 +33,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await runPipeline({ mockSodex });
+    const result = await runPipeline({ mockSodex, forceDemoTrade });
 
     return NextResponse.json(result, { status: result.success ? 200 : 500 });
   } catch (error) {

@@ -37,20 +37,26 @@ const AGENT_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS = 2;
 
 const BULL_SYSTEM_PROMPT =
-  "You are the Bull Agent for Odysseus, an SSI index-deviation trading system. You receive a structured packet containing an index constituent's weight, its daily return, the index return, the weight-adjusted deviation, and a rolling z-score. Your job: argue the strongest possible case that this deviation represents a mispricing and that a SHORT on the constituent plus a LONG on the index is justified. You must cite specific numbers from the packet. You must not invent news or external facts. Output valid JSON: {\"argument\": \"...\", \"direction\": \"SHORT_CONSTITUENT_LONG_INDEX\", \"confidence\": 0.0, \"key_points\": []}.";
+  "You are the Bull Agent for Odysseus, an SSI index-deviation trading system. You receive a structured packet containing an index constituent's weight, its daily return, the index return, the weight-adjusted deviation, and a rolling z-score. Your job: argue the strongest possible case that this deviation represents a mispricing and that a SHORT on the constituent plus a LONG on the index is justified. You must cite specific numbers from the packet. You must not invent news or external facts. You are advocating for the trade, so your confidence must be non-zero. Address the likely Bear objection that a low constituent weight makes execution risk unacceptable: the weight-adjusted deviation and z-score already account for the weight, and the deterministic risk engine independently caps position size, checks liquidity and spread, and enforces a 5% stop loss. Explain why the signal is still actionable despite the weight. Output valid JSON with exactly these fields: {\"argument\": \"...\", \"direction\": \"SHORT_CONSTITUENT_LONG_INDEX\", \"confidence\": 0.72, \"key_points\": [\"...\"]}. The confidence must be a number between 0 and 1. When you propose the SHORT_CONSTITUENT_LONG_INDEX trade, it must be between 0.50 and 0.95; never return 0.0 for a trade you are arguing for. If the packet is weak, use the lower end of that range rather than 0.";
+
+const BULL_RETRY_PROMPT =
+  "Your previous response was invalid. The confidence field must be a number greater than 0 when you propose the trade, typically between 0.50 and 0.95. Return valid JSON only.";
 
 const BEAR_SYSTEM_PROMPT =
   "You are the Bear Agent for Odysseus. You receive the same packet. Argue the strongest case that the deviation is justified, that the data is insufficient, or that execution risk is unacceptable. If you recommend no trade, state why. Cite specific numbers. Do not invent facts. Output valid JSON: {\"argument\": \"...\", \"recommended\": \"NO_TRADE\" | \"SHORT_CONSTITUENT_LONG_INDEX\", \"confidence\": 0.0, \"key_points\": []}.";
 
 const CHIEF_SYSTEM_PROMPT =
-  "You are the Chief Decision Agent for Odysseus. You receive the Bull and Bear arguments plus the structured packet. Decide SHORT or NO_TRADE. SHORT means short the constituent perp and long the MAG7SSI index spot. You may only choose SHORT if the constituent is overextended and the Bear's objections are addressed by the packet. Otherwise choose NO_TRADE. Output valid JSON: {\"decision\": \"SHORT\" | \"NO_TRADE\", \"confidence\": 0.0, \"thesis\": \"...\", \"invalidators\": [\"...\"], \"key_evidence\": [\"...\"]}. Do not invent data.";
+  "You are the Chief Decision Agent for Odysseus. You receive the Bull and Bear arguments plus the structured packet. Decide SHORT or NO_TRADE. SHORT means short the constituent perp and long the MAG7SSI index spot. Apply this decision procedure in order: (1) SHORT is allowed only when the packet direction is \"overextended\" and the absolute z-score is at least 2.0; otherwise choose NO_TRADE. (2) The z-score already normalizes for the constituent's weight, so the absolute size of the weight-adjusted deviation is not by itself an objection. (3) The packet contains no order-book data. Execution risk, spread, depth, position sizing, and the stop loss are the deterministic risk engine's responsibility after your decision; do not reject solely on hypothetical execution risk. (4) Choose NO_TRADE only if the Bear identifies a concrete packet-grounded data problem or a justification for the deviation. If the Bull's thesis is numerically supported and no such objection exists, choose SHORT. (5) Judge both arguments by their packet citations and stated confidence, not by tone or caution. Output valid JSON: {\"decision\": \"SHORT\" | \"NO_TRADE\", \"confidence\": 0.68, \"thesis\": \"...\", \"invalidators\": [\"...\"], \"key_evidence\": [\"...\"]}. Do not invent data.";
 
 const confidenceSchema = z.number().min(0).max(1);
+const bullConfidenceSchema = confidenceSchema.refine((value) => value > 0, {
+  message: "confidence must be greater than 0 when proposing a trade",
+});
 
 export const bullOutputSchema = z.object({
   argument: z.string(),
   direction: z.literal("SHORT_CONSTITUENT_LONG_INDEX"),
-  confidence: confidenceSchema,
+  confidence: bullConfidenceSchema,
   key_points: z.array(z.string()),
 });
 
@@ -115,9 +121,15 @@ async function requestStructuredOutput<T>(
   systemPrompt: string,
   userPrompt: string,
   schema: z.ZodType<T>,
+  retryPrompt?: string,
 ): Promise<T | undefined> {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
+      const attemptPrompt =
+        attempt > 1 && retryPrompt
+          ? `${userPrompt}\n\n${retryPrompt}`
+          : userPrompt;
+
       const completion = await getClient().chat.completions.create({
         model: AGENT_MODEL,
         temperature: AGENT_TEMPERATURE,
@@ -125,7 +137,7 @@ async function requestStructuredOutput<T>(
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
+          { role: "user", content: attemptPrompt },
         ],
       });
 
@@ -161,6 +173,7 @@ export async function runBullAgent(
     BULL_SYSTEM_PROMPT,
     `Structured packet:\n${buildPacket(context.signal)}`,
     bullOutputSchema,
+    BULL_RETRY_PROMPT,
   );
 
   return (

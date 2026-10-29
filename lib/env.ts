@@ -92,6 +92,8 @@ export const envSchema = z.object({
 
   ALLOW_PAPER_SPOT: booleanFromEnv,
 
+  FORCE_DEMO_TRADE: booleanFromEnv,
+
   NEXT_PUBLIC_APP_URL: z.preprocess(
     emptyToUndefined,
     z.string().url().default("http://localhost:3000"),

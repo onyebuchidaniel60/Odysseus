@@ -111,4 +111,54 @@ describe("evaluateRisk", () => {
       reason: "capped_by_depth",
     });
   });
+
+  it("bypasses AI confidence and liquidity when forceDemoTrade is enabled", () => {
+    const result = evaluateRisk({
+      ...baseContext,
+      depthUsd: 0,
+      forceDemoTrade: true,
+      chiefDecision: { ...chiefDecision, confidence: 0 },
+    });
+
+    expect(result.approved).toBe(true);
+    expect(result.approvedSizeUsd).toBe(0);
+    expect(checkByName(result.checks, "depth")).toMatchObject({
+      passed: true,
+      reason: "bypassed_by_force_demo_trade",
+    });
+    expect(checkByName(result.checks, "ai_confidence")).toMatchObject({
+      passed: true,
+      reason: "bypassed_by_force_demo_trade",
+    });
+  });
+
+  it("still rejects a wide spread when forceDemoTrade is enabled", () => {
+    const result = evaluateRisk({
+      ...baseContext,
+      forceDemoTrade: true,
+      spreadPct: 0.006,
+      depthUsd: 0,
+      chiefDecision: { ...chiefDecision, confidence: 0 },
+    });
+
+    expect(result.approved).toBe(false);
+    expect(checkByName(result.checks, "spread")).toMatchObject({
+      passed: false,
+      reason: "spread_too_wide",
+    });
+  });
+
+  it("still rejects low data confidence when forceDemoTrade is enabled", () => {
+    const result = evaluateRisk({
+      ...baseContext,
+      forceDemoTrade: true,
+      dataConfidence: 0.5,
+    });
+
+    expect(result.approved).toBe(false);
+    expect(checkByName(result.checks, "data_confidence")).toMatchObject({
+      passed: false,
+      reason: "insufficient_data_confidence",
+    });
+  });
 });

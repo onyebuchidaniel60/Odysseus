@@ -22,9 +22,12 @@ interface ReplayRequestBody {
 
 export async function POST(request: Request) {
   let operatorSecret: string;
+  let forceDemoTrade: boolean;
 
   try {
-    operatorSecret = getEnv().OPERATOR_SECRET;
+    const env = getEnv();
+    operatorSecret = env.OPERATOR_SECRET;
+    forceDemoTrade = env.FORCE_DEMO_TRADE;
   } catch {
     return NextResponse.json(
       { error: "Server configuration error" },
@@ -92,7 +95,7 @@ export async function POST(request: Request) {
         constituents: snapshot.constituents as Constituent[],
         replayOf: snapshot.id,
       },
-      { mockSodex: true },
+      { mockSodex: true, forceDemoTrade },
     );
 
     if (!result.success || !result.runId) {

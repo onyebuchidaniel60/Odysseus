@@ -25,6 +25,7 @@ describe("environment schema", () => {
     expect(env.MAX_PERP_LEVERAGE).toBe(2);
     expect(env.MOCK_SODEX).toBe(false);
     expect(env.ALLOW_PAPER_SPOT).toBe(false);
+    expect(env.FORCE_DEMO_TRADE).toBe(false);
     expect(env.NEXT_PUBLIC_APP_URL).toBe("http://localhost:3000");
     expect(env.ODYSSEUS_INDEX_TICKER).toBe("ssimag7");
     expect(env.SODEX_ACCOUNT_ID).toBe("60504");
@@ -133,5 +134,17 @@ describe("environment schema", () => {
         .ALLOW_PAPER_SPOT,
     ).toBe(false);
     expect(envSchema.parse(requiredEnv).ALLOW_PAPER_SPOT).toBe(false);
+  });
+
+  it("only enables the demo trade bypass when explicitly set to true", () => {
+    expect(
+      envSchema.parse({ ...requiredEnv, FORCE_DEMO_TRADE: "true" })
+        .FORCE_DEMO_TRADE,
+    ).toBe(true);
+    expect(
+      envSchema.parse({ ...requiredEnv, FORCE_DEMO_TRADE: "false" })
+        .FORCE_DEMO_TRADE,
+    ).toBe(false);
+    expect(envSchema.parse(requiredEnv).FORCE_DEMO_TRADE).toBe(false);
   });
 });

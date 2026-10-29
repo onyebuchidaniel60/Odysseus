@@ -34,7 +34,10 @@ const INDEX_TICKER = "ssimag7";
 const MAG7_TOKEN_CURRENCY_ID = "1871600836616355842";
 const Z_SCORE_THRESHOLD = 2.0;
 const DEMO_RISK_INPUTS = {
-  portfolioBalanceUsd: 100_000,
+  // Demo portfolio is sized to the SoDEX testnet perps account (~19 vUSDC
+  // available margin). 10% = a ~$10 notional order, which matches the real
+  // minimum-sized fills confirmed in Phase 9.
+  portfolioBalanceUsd: 100,
   spreadPct: 0.001,
   depthUsd: 200_000,
   dataConfidence: 0.9,
@@ -138,6 +141,7 @@ export interface PipelineStore {
 
 export interface RunPipelineOptions {
   mockSodex: boolean;
+  forceDemoTrade?: boolean;
   store?: PipelineStore;
   riskContext?: Partial<Omit<RiskContext, "chiefDecision">>;
   now?: Date;
@@ -145,6 +149,7 @@ export interface RunPipelineOptions {
 
 export interface ProcessSnapshotOptions {
   mockSodex: boolean;
+  forceDemoTrade?: boolean;
   store?: PipelineStore;
   riskContext?: Partial<Omit<RiskContext, "chiefDecision">>;
 }
@@ -575,6 +580,8 @@ export async function processSnapshot(
     await store.log(runId, "AI_DECISION", {
       decision: chief.decision,
       confidence: chief.confidence,
+      bullConfidence: bull.confidence,
+      bearConfidence: bear.confidence,
       symbol: topSignal.signal.symbol,
     });
 
@@ -595,6 +602,7 @@ export async function processSnapshot(
     const risk = evaluateRisk({
       chiefDecision: chief,
       ...DEMO_RISK_INPUTS,
+      forceDemoTrade: options.forceDemoTrade ?? false,
       ...options.riskContext,
     });
     const riskRow = await store.insertRiskCheck({
@@ -633,6 +641,7 @@ export async function processSnapshot(
     await store.log(runId, "RISK_APPROVED", {
       approvedSizeUsd: sizeUsd,
       stopLossPct: risk.stopLossPct,
+      forceDemoTrade: options.forceDemoTrade === true,
     });
 
     const legs: OrderLeg[] = [
@@ -752,6 +761,7 @@ export async function runPipeline(
       },
       {
         mockSodex: options.mockSodex,
+        forceDemoTrade: options.forceDemoTrade,
         store: options.store,
         riskContext: options.riskContext,
       },

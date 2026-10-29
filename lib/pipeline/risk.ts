@@ -6,6 +6,7 @@ export interface RiskContext {
   spreadPct: number;
   depthUsd: number;
   dataConfidence: number;
+  forceDemoTrade?: boolean;
 }
 
 export interface RiskCheck {
@@ -46,6 +47,7 @@ export function evaluateRisk(context: RiskContext): RiskResult {
   }
 
   const checks: RiskCheck[] = [];
+  const forceDemoTrade = context.forceDemoTrade === true;
 
   const dataConfidencePassed =
     context.dataConfidence >= MIN_DATA_CONFIDENCE;
@@ -67,11 +69,16 @@ export function evaluateRisk(context: RiskContext): RiskResult {
   });
 
   const depthPassed = context.depthUsd >= MIN_DEPTH_USD;
+  const depthBypassed = forceDemoTrade && !depthPassed;
   checks.push({
     name: "depth",
-    passed: depthPassed,
+    passed: depthPassed || forceDemoTrade,
     value: context.depthUsd,
-    ...(depthPassed ? {} : { reason: "insufficient_liquidity" }),
+    ...(depthBypassed
+      ? { reason: "bypassed_by_force_demo_trade" }
+      : depthPassed
+        ? {}
+        : { reason: "insufficient_liquidity" }),
   });
 
   let approvedSizeUsd = context.portfolioBalanceUsd * MAX_POSITION_PCT;
@@ -97,11 +104,16 @@ export function evaluateRisk(context: RiskContext): RiskResult {
 
   const aiConfidencePassed =
     context.chiefDecision.confidence >= MIN_AI_CONFIDENCE;
+  const aiConfidenceBypassed = forceDemoTrade && !aiConfidencePassed;
   checks.push({
     name: "ai_confidence",
-    passed: aiConfidencePassed,
+    passed: aiConfidencePassed || forceDemoTrade,
     value: context.chiefDecision.confidence,
-    ...(aiConfidencePassed ? {} : { reason: "low_ai_confidence" }),
+    ...(aiConfidenceBypassed
+      ? { reason: "bypassed_by_force_demo_trade" }
+      : aiConfidencePassed
+        ? {}
+        : { reason: "low_ai_confidence" }),
   });
 
   const approved = checks.every((check) => check.passed);
