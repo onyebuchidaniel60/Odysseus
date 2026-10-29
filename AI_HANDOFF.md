@@ -16,6 +16,20 @@
 - Data: SoSoValue daily klines only (90-day window on the current API plan, no intraday)
 - Execution: SoDEX testnet
 
+## Demo video
+
+- Command: `npm run demo:video`
+- Output: `odysseus-demo.mp4` — 121.6s, 1920×1080 H.264/AAC, 13 MB
+- Generator: `edge-tts` narration → Playwright recording → FFmpeg composition.
+  Full instructions and caveats in `scripts/demo-video/README.md`.
+- Console scenes use the persisted local execution run
+  `64c1368c-2bee-4172-9575-7c2c53fb0499`; the landing scene is recorded from the
+  live Vercel deployment.
+- **Production data gap:** the Vercel database currently contains only
+  `1514e254-007d-47a5-8566-225a6c01ffd0` (`NO_TRADE`). The `SHORT` execution run
+  exists only in the local PostgreSQL database. Seed production before judging
+  if the live dashboard must match the video.
+
 ## Phase 2 findings — SoSoValue API
 
 ### MAG7.ssi constituents (live, current weights)

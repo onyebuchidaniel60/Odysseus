@@ -4,6 +4,10 @@ out/
 build/
 coverage/
 
+# generated demo intermediates
+demo/clips/
+demo/video/
+
 .env
 .env.*
 !.env.example

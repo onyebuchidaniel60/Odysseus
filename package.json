@@ -10,6 +10,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "demo:video": "node scripts/demo-video/run.mjs",
+    "demo:narration": "node scripts/demo-video/generate-narration.mjs",
+    "demo:record": "node scripts/demo-video/record.mjs",
+    "demo:compose": "node scripts/demo-video/compose.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate.mjs",
     "db:push": "drizzle-kit push"
@@ -36,6 +40,7 @@
     "drizzle-kit": "0.31.11",
     "eslint": "8.57.1",
     "eslint-config-next": "14.2.35",
+    "playwright": "^1.64.1",
     "postcss": "8.5.31",
     "tailwindcss": "3.4.19",
     "typescript": "5.9.3",
