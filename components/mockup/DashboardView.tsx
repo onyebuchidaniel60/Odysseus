@@ -35,8 +35,8 @@ interface DashboardViewProps {
   latestLoading: boolean;
   error: string | null;
   latestError: string | null;
-  secret: string;
-  onSecretChange: (value: string) => void;
+  wallet: ReactNode;
+  canRun: boolean;
   onRun: () => void;
   onRefresh: () => void;
   onExport: () => void;
@@ -264,8 +264,8 @@ export function DashboardView({
   latestLoading,
   error,
   latestError,
-  secret,
-  onSecretChange,
+  wallet,
+  canRun,
   onRun,
   onRefresh,
   onExport,
@@ -432,20 +432,7 @@ export function DashboardView({
         </div>
 
         <div className="flex flex-col gap-2.5 sm:flex-row sm:items-end">
-          <label className="flex flex-col gap-1">
-            <span className="font-mockup-mono text-[8px] uppercase tracking-[0.16em] text-mockup-dim">
-              Operator secret
-            </span>
-            <input
-              type="password"
-              value={secret}
-              onChange={(event) => onSecretChange(event.target.value)}
-              placeholder="x-operator-key"
-              autoComplete="off"
-              spellCheck={false}
-              className="h-8 w-full border border-mockup-line bg-mockup-panel px-2.5 font-mockup-mono text-[10px] text-mockup-text outline-none transition placeholder:text-mockup-dim/60 focus:border-mockup-amber/40 focus:ring-1 focus:ring-mockup-amber/20 sm:w-52"
-            />
-          </label>
+          {wallet}
 
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -473,7 +460,7 @@ export function DashboardView({
             <button
               type="button"
               onClick={onRun}
-              disabled={running}
+              disabled={running || !canRun}
               className="flex h-8 items-center gap-2 bg-mockup-amber px-3 font-mockup text-[11px] font-semibold text-black shadow-mockup-glow transition hover:bg-mockup-amber-soft disabled:cursor-not-allowed disabled:opacity-60"
             >
               {running ? (
@@ -511,12 +498,12 @@ export function DashboardView({
             ) : runs.length === 0 ? (
               <EmptyState
                 title="No runs yet."
-                body="Enter the operator secret and run the pipeline to create the first MAG7.ssi audit trail."
+                body="Connect the operator wallet and run the pipeline to create the first MAG7.ssi audit trail."
                 action={
                   <button
                     type="button"
                     onClick={onRun}
-                    disabled={running}
+                    disabled={running || !canRun}
                     className="inline-flex h-8 items-center gap-2 bg-mockup-amber px-3 font-mockup text-[11px] font-semibold text-black shadow-mockup-glow transition hover:bg-mockup-amber-soft disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Icon name="play" className="h-3 w-3" />

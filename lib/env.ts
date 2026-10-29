@@ -70,6 +70,15 @@ export const envSchema = z.object({
     z.string().min(1).default("gpt-4o-mini"),
   ),
 
+  NEXT_PUBLIC_OPERATOR_ADDRESS: z
+    .string({
+      required_error: "NEXT_PUBLIC_OPERATOR_ADDRESS is required",
+    })
+    .regex(
+      /^0x[0-9a-fA-F]{40}$/,
+      "NEXT_PUBLIC_OPERATOR_ADDRESS must be a 0x-prefixed 20-byte hex address",
+    ),
+
   OPERATOR_SECRET: z
     .string({ required_error: "OPERATOR_SECRET is required" })
     .min(32, "OPERATOR_SECRET must be at least 32 characters"),

@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "@/lib/db";
 import { indexSnapshot } from "@/lib/db/schema";
-import { getEnv } from "@/lib/env";
+import { getEnv, type Env } from "@/lib/env";
+import { isAuthorizedOperator } from "@/lib/operator-auth";
 import {
   processSnapshot,
   RunAlreadyExistsError,
@@ -21,24 +22,25 @@ interface ReplayRequestBody {
   snapshotId?: unknown;
 }
 
-export async function POST(request: Request) {
-  let operatorSecret: string;
-  let forceDemoTrade: boolean;
-
+function loadEnv(): Env | null {
   try {
-    const env = getEnv();
-    operatorSecret = env.OPERATOR_SECRET;
-    forceDemoTrade = env.FORCE_DEMO_TRADE;
+    return getEnv();
   } catch {
+    return null;
+  }
+}
+
+export async function POST(request: Request) {
+  const env = loadEnv();
+
+  if (!env) {
     return NextResponse.json(
       { error: "Server configuration error" },
       { status: 500 },
     );
   }
 
-  const providedSecret = request.headers.get("x-operator-key");
-
-  if (!providedSecret || providedSecret !== operatorSecret) {
+  if (!isAuthorizedOperator(request, env)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -96,7 +98,7 @@ export async function POST(request: Request) {
         constituents: snapshot.constituents as Constituent[],
         replayOf: snapshot.id,
       },
-      { mockSodex: true, forceDemoTrade },
+      { mockSodex: true, forceDemoTrade: env.FORCE_DEMO_TRADE },
     );
 
     if (!result.success || !result.runId) {

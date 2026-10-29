@@ -11,6 +11,7 @@ const requiredEnv = {
   SODEX_API_KEY_NAME: "odysseus-testnet",
   SODEX_ACCOUNT_ID: "60504",
   OPENAI_API_KEY: "sk-test",
+  NEXT_PUBLIC_OPERATOR_ADDRESS: "0x69461740214a68d34157b3A14f513fA47f9a08E0",
   OPERATOR_SECRET: "a".repeat(64),
 };
 
@@ -80,6 +81,7 @@ describe("environment schema", () => {
           "SODEX_API_KEY_NAME",
           "SODEX_ACCOUNT_ID",
           "OPENAI_API_KEY",
+          "NEXT_PUBLIC_OPERATOR_ADDRESS",
           "OPERATOR_SECRET",
         ]),
       );
@@ -93,6 +95,23 @@ describe("environment schema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("rejects malformed operator wallet addresses", () => {
+    expect(
+      envSchema.safeParse({
+        ...requiredEnv,
+        NEXT_PUBLIC_OPERATOR_ADDRESS: "0x1234",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      envSchema.safeParse({
+        ...requiredEnv,
+        NEXT_PUBLIC_OPERATOR_ADDRESS:
+          "69461740214a68d34157b3A14f513fA47f9a08E0",
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects UUID account IDs and accepts uint64 strings", () => {

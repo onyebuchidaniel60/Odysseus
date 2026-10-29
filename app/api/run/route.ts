@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { getEnv } from "@/lib/env";
+import { getEnv, type Env } from "@/lib/env";
+import { isAuthorizedOperator } from "@/lib/operator-auth";
 import {
   RunAlreadyExistsError,
   runPipeline,
@@ -10,31 +11,33 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function POST(request: Request) {
-  let operatorSecret: string;
-  let mockSodex: boolean;
-  let forceDemoTrade: boolean;
-
+function loadEnv(): Env | null {
   try {
-    const env = getEnv();
-    operatorSecret = env.OPERATOR_SECRET;
-    mockSodex = env.MOCK_SODEX;
-    forceDemoTrade = env.FORCE_DEMO_TRADE;
+    return getEnv();
   } catch {
+    return null;
+  }
+}
+
+export async function POST(request: Request) {
+  const env = loadEnv();
+
+  if (!env) {
     return NextResponse.json(
       { error: "Server configuration error" },
       { status: 500 },
     );
   }
 
-  const providedSecret = request.headers.get("x-operator-key");
-
-  if (!providedSecret || providedSecret !== operatorSecret) {
+  if (!isAuthorizedOperator(request, env)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const result = await runPipeline({ mockSodex, forceDemoTrade });
+    const result = await runPipeline({
+      mockSodex: env.MOCK_SODEX,
+      forceDemoTrade: env.FORCE_DEMO_TRADE,
+    });
 
     return NextResponse.json(result, { status: result.success ? 200 : 500 });
   } catch (error) {

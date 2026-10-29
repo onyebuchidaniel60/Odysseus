@@ -14,8 +14,8 @@ import {
   cx,
 } from "@/components/mockup/primitives";
 import type { RunSummaryView, RunsResponse } from "@/components/types";
-
-const SECRET_STORAGE_KEY = "odysseus.operator-secret";
+import { useOperatorWallet } from "@/components/useOperatorWallet";
+import { WalletConnect } from "@/components/WalletConnect";
 
 type ToastTone = "success" | "error" | "warning";
 
@@ -92,11 +92,10 @@ function ReplaySkeleton() {
 
 export default function ReplayPage() {
   const router = useRouter();
+  const wallet = useOperatorWallet();
   const [runs, setRuns] = useState<RunSummaryView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [secret, setSecret] = useState("");
-  const [secretLoaded, setSecretLoaded] = useState(false);
   const [replayingId, setReplayingId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
 
@@ -135,28 +134,6 @@ export default function ReplayPage() {
   }, [loadRuns]);
 
   useEffect(() => {
-    try {
-      setSecret(window.localStorage.getItem(SECRET_STORAGE_KEY) ?? "");
-    } catch {
-      setSecret("");
-    }
-
-    setSecretLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (!secretLoaded) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(SECRET_STORAGE_KEY, secret);
-    } catch {
-      return;
-    }
-  }, [secret, secretLoaded]);
-
-  useEffect(() => {
     if (!toast) {
       return;
     }
@@ -175,10 +152,13 @@ export default function ReplayPage() {
       return;
     }
 
-    const operatorKey = secret.trim();
+    if (!wallet.isConnected) {
+      showToast("Connect the operator wallet first.", "error");
+      return;
+    }
 
-    if (!operatorKey) {
-      showToast("Enter the operator secret first.", "error");
+    if (!wallet.isAuthorized || !wallet.address) {
+      showToast("Unauthorized wallet. Connect the operator wallet.", "error");
       return;
     }
 
@@ -189,7 +169,7 @@ export default function ReplayPage() {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-operator-key": operatorKey,
+          "x-operator-wallet": wallet.address,
         },
         body: JSON.stringify({ snapshotId }),
       });
@@ -198,7 +178,7 @@ export default function ReplayPage() {
         | null;
 
       if (response.status === 401) {
-        showToast("Invalid operator secret.", "error");
+        showToast("Wallet is not authorized for replay.", "error");
         return;
       }
 
@@ -249,20 +229,9 @@ export default function ReplayPage() {
             </p>
           </div>
 
-          <label className="flex flex-col gap-1">
-            <span className="font-mockup-mono text-[8px] uppercase tracking-[0.16em] text-mockup-dim">
-              Operator secret
-            </span>
-            <input
-              type="password"
-              value={secret}
-              onChange={(event) => setSecret(event.target.value)}
-              placeholder="x-operator-key"
-              autoComplete="off"
-              spellCheck={false}
-              className="h-8 w-full border border-mockup-line bg-mockup-panel px-2.5 font-mockup-mono text-[10px] text-mockup-text outline-none transition placeholder:text-mockup-dim/60 focus:border-mockup-amber/40 focus:ring-1 focus:ring-mockup-amber/20 sm:w-64"
-            />
-          </label>
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-end">
+            <WalletConnect wallet={wallet} />
+          </div>
         </div>
 
         <Panel className="mt-3">
@@ -361,7 +330,7 @@ export default function ReplayPage() {
                           <button
                             type="button"
                             onClick={() => void handleReplay(run.id)}
-                            disabled={replayingId !== null}
+                            disabled={replayingId !== null || !wallet.isAuthorized}
                             className="inline-flex h-7 items-center gap-1.5 border border-mockup-amber/30 bg-mockup-amber/10 px-2.5 font-mockup-mono text-[8px] font-medium uppercase tracking-[0.14em] text-mockup-amber transition hover:bg-mockup-amber/15 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {isReplaying ? (

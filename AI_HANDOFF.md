@@ -2,8 +2,8 @@
 
 ## Current status
 
-- Current phase: **Phase 9 — Live testnet verification complete (demo execution)**
-- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs; Phase 7 — dashboard and run detail UI; Phase 8 — replay API, replay page, and audit export; Phase 9 — live SoDEX execution with `PAPER_SPOT` fallback
+- Current phase: **Phase 9.5 — Web3 wallet authentication and brand favicon complete**
+- Completed: Phase 1 — Foundation; Phase 2 — SoSoValue client with synthesized index klines; Phase 3 — deterministic validation gate and deviation engine; Phase 4 — Bull/Bear/Chief agents via OpenRouter; Phase 5 — deterministic risk engine and SoDEX mock/signed client; Phase 6 — pipeline orchestrator and run APIs; Phase 7 — dashboard and run detail UI; Phase 8 — replay API, replay page, and audit export; Phase 9 — live SoDEX execution with `PAPER_SPOT` fallback; Phase 9.5 — wallet-gated dashboard/replay and favicon
 - Demo run: `64c1368c-2bee-4172-9575-7c2c53fb0499` — Bull `0.72`, Bear `0.85`, Chief `SHORT` at `0.72`; HYPE perps order `3155812057` filled; paper spot order `paper_spot_49580e3c-9bb8-41bd-9649-549a1ff39974`; `execution_mode = "PAPER_SPOT"`.
 - Next task: await operator instruction for Vercel deployment. Do not start Phase 10.
 
@@ -643,6 +643,62 @@ clean.
 - `FORCE_DEMO_TRADE` must remain `false` outside the hackathon demo. It does not
   override a Chief `NO_TRADE` decision.
 
+## Phase 9.5 — Web3 wallet authentication + favicon
+
+### Files changed
+
+- `package.json`, `package-lock.json` — added `wagmi@^3.7.9` and
+  `@tanstack/react-query@^5.105.0`; `viem` updated to `^2.57.13`.
+- `app/icon.svg` — brand favicon: `#050505` background with an amber (`#F5A623`)
+  geometric "O". Served by Next.js as `/icon.svg`.
+- `.env.example`, `lib/env.ts` — required `NEXT_PUBLIC_OPERATOR_ADDRESS`
+  (0x-prefixed 20-byte address).
+- `lib/wagmi.ts` — wagmi config with the injected connector and `ssr: true`.
+  Imports `injected` from `wagmi/connectors/injected` to avoid pulling optional
+  connector peer dependencies into the bundle.
+- `components/Web3Provider.tsx` — `WagmiProvider` + `QueryClientProvider`.
+- `components/useOperatorWallet.ts` — connect/disconnect state, address
+  normalization, and friendly no-wallet/rejected errors.
+- `components/WalletConnect.tsx` — Connect Wallet button, green
+  `Operator Connected` / red `Unauthorized Wallet` badges.
+- `app/layout.tsx` — wraps every page in `Web3Provider`.
+- `app/dashboard/page.tsx`, `components/mockup/DashboardView.tsx` — secret input
+  removed; Run Pipeline is enabled only for the operator wallet and sends
+  `x-operator-wallet`.
+- `app/replay/page.tsx` — same wallet gate; Replay buttons are disabled until
+  the operator wallet is connected.
+- `lib/operator-auth.ts`, `app/api/run/route.ts`,
+  `app/api/run/replay/route.ts` — accepts `x-operator-wallet` (matched against
+  `NEXT_PUBLIC_OPERATOR_ADDRESS`) or the legacy `x-operator-key`.
+- `tests/unit/env.test.ts`, `tests/unit/operator-auth.test.ts` — address
+  validation and auth coverage (82 tests total).
+
+### Authentication behavior
+
+- The browser connects an injected wallet (MetaMask) via `useConnect`.
+- The connected address is compared case-insensitively with
+  `NEXT_PUBLIC_OPERATOR_ADDRESS`. Matches get the green badge and can run or
+  replay; other wallets get the red badge and disabled actions.
+- Requests send `x-operator-wallet`; the API accepts it when it matches the
+  configured operator address, and still accepts `x-operator-key` for cron jobs
+  and scripts.
+- Missing MetaMask is caught and surfaced as
+  `No browser wallet detected. Install MetaMask, then reload.`; rejected
+  connections show a rejection message.
+- This is a UX gate, not SIWE: both the client check and the header are
+  spoofable. A production deployment should replace it with a nonce + signature
+  verification flow. `NEXT_PUBLIC_OPERATOR_ADDRESS` is public by design.
+
+### Verification
+
+- `npm test` — 82/82 passing.
+- `npm run build` — successful; `/icon.svg`, `/dashboard`, and `/replay` build.
+- `npm run lint` — clean.
+- Runtime smoke test against `next start`: wrong wallet → `401`, matching wallet
+  → `400` for a deliberately invalid snapshot (auth passed), legacy secret →
+  `400` (auth passed), `/dashboard` → `200`, `/icon.svg` →
+  `200 image/svg+xml`.
+
 ## Known API limitation — index klines
 
 The `/indices/ssimag7/klines` endpoint returns empty data for all valid requests.
@@ -735,7 +791,12 @@ the 0.5% tolerance.
 - See `ARCHITECTURE.md` §Stack and `PROJECT_SPEC.md` §Security.
 - Env vars required: `DATABASE_URL`, `SOSO_API_KEY`,
   `SODEX_API_KEY_PRIVATE_KEY`, `SODEX_API_KEY_NAME`, `SODEX_ACCOUNT_ID`,
-  `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `OPERATOR_SECRET`.
+  `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `NEXT_PUBLIC_OPERATOR_ADDRESS`,
+  `OPERATOR_SECRET`.
+- `NEXT_PUBLIC_OPERATOR_ADDRESS` is the operator master wallet
+  (`0x69461740214a68d34157b3A14f513fA47f9a08E0` on SoDEX). It is public and is
+  used by the dashboard/replay wallet gate and the API's `x-operator-wallet`
+  check.
 - `OPENROUTER_API_KEY` is used by the Phase 4 agents. `OPENAI_API_KEY` is still
   required by the Phase 1 env schema but is not used by the agents.
 - `SODEX_BASE_URL` should be the gateway host
@@ -777,8 +838,9 @@ npm run db:migrate
 
 ## Next task
 
-Phase 9 is complete for the demo. Run
-`64c1368c-2bee-4172-9575-7c2c53fb0499` is the reference mixed execution:
+Phase 9.5 wallet authentication and favicon are complete. The dashboard and
+replay pages now require the operator wallet. Run
+`64c1368c-2bee-4172-9575-7c2c53fb0499` remains the reference mixed execution:
 HYPE perps order `3155812057` with a `paper_spot_...` index leg and
 `execution_mode = "PAPER_SPOT"`.
 

@@ -11,8 +11,8 @@ import type {
   RunSummaryView,
   RunsResponse,
 } from "@/components/types";
-
-const SECRET_STORAGE_KEY = "odysseus.operator-secret";
+import { useOperatorWallet } from "@/components/useOperatorWallet";
+import { WalletConnect } from "@/components/WalletConnect";
 
 type ToastTone = "success" | "error" | "warning";
 
@@ -42,8 +42,7 @@ function errorMessage(payload: unknown, fallback: string): string {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [secret, setSecret] = useState("");
-  const [secretLoaded, setSecretLoaded] = useState(false);
+  const wallet = useOperatorWallet();
   const [runs, setRuns] = useState<RunSummaryView[]>([]);
   const [latestDetail, setLatestDetail] = useState<RunDetailResponse | null>(
     null,
@@ -151,28 +150,6 @@ export default function DashboardPage() {
   }, [latestRunId]);
 
   useEffect(() => {
-    try {
-      setSecret(window.localStorage.getItem(SECRET_STORAGE_KEY) ?? "");
-    } catch {
-      setSecret("");
-    }
-
-    setSecretLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (!secretLoaded) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(SECRET_STORAGE_KEY, secret);
-    } catch {
-      return;
-    }
-  }, [secret, secretLoaded]);
-
-  useEffect(() => {
     if (!toast) {
       return;
     }
@@ -191,10 +168,13 @@ export default function DashboardPage() {
       return;
     }
 
-    const operatorKey = secret.trim();
+    if (!wallet.isConnected) {
+      showToast("Connect the operator wallet first.", "error");
+      return;
+    }
 
-    if (!operatorKey) {
-      showToast("Enter the operator secret first.", "error");
+    if (!wallet.isAuthorized || !wallet.address) {
+      showToast("Unauthorized wallet. Connect the operator wallet.", "error");
       return;
     }
 
@@ -204,7 +184,7 @@ export default function DashboardPage() {
       const response = await fetch("/api/run", {
         method: "POST",
         headers: {
-          "x-operator-key": operatorKey,
+          "x-operator-wallet": wallet.address,
         },
       });
       const payload = (await response.json().catch(() => null)) as
@@ -218,7 +198,7 @@ export default function DashboardPage() {
       }
 
       if (response.status === 401) {
-        showToast("Invalid operator secret.", "error");
+        showToast("Wallet is not authorized for pipeline runs.", "error");
         return;
       }
 
@@ -279,8 +259,8 @@ export default function DashboardPage() {
           latestLoading={latestLoading}
           error={error}
           latestError={latestError}
-          secret={secret}
-          onSecretChange={setSecret}
+          wallet={<WalletConnect wallet={wallet} />}
+          canRun={wallet.isAuthorized}
           onRun={() => void handleRun()}
           onRefresh={() => void loadRuns()}
           onExport={handleExportRuns}

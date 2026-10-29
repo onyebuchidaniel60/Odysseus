@@ -6,6 +6,8 @@ import {
   Space_Grotesk,
 } from "next/font/google";
 
+import { Web3Provider } from "@/components/Web3Provider";
+
 import "./globals.css";
 
 const inter = Inter({
@@ -48,7 +50,7 @@ export default function RootLayout({
       className={`${inter.variable} ${jetBrainsMono.variable} ${spaceGrotesk.variable} ${ibmPlexMono.variable}`}
     >
       <body className="min-h-screen bg-background font-sans text-foreground antialiased">
-        {children}
+        <Web3Provider>{children}</Web3Provider>
       </body>
     </html>
   );
