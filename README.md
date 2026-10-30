@@ -5,7 +5,7 @@
 One operator. Adversarial AI debate. Deterministic risk gates. Real testnet execution.
 
 > **Live demo:** https://odysseus-self.vercel.app<br>
-> **Demo video:** [`odysseus-demo.mp4`](odysseus-demo.mp4)<br>
+> **Demo video pipeline:** [`scripts/demo-video`](scripts/demo-video/README.md)<br>
 > **Hackathon:** SoSoValue Buildathon — Wave 3
 
 ---

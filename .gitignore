@@ -4,9 +4,14 @@ out/
 build/
 coverage/
 
-# generated demo intermediates
-demo/clips/
-demo/video/
+# generated media and local-only assets
+demo/
+design-reference/
+tmp/
+*.mp4
+*.webm
+*.mp3
+*.wav
 
 .env
 .env.*
